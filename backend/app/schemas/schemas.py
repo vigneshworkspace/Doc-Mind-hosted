@@ -1,6 +1,6 @@
 from pydantic import BaseModel, ConfigDict
 from typing import Optional, List, Any
-from datetime import date
+import datetime
 
 
 # ── Auth ──────────────────────────────────────────────────────

@@ -1,11 +1,77 @@
-function ScreenNotes({ state, dispatch }) {
+import { useState, useEffect } from 'react';
+import { Icon } from '../components/Shell.jsx';
+
+export default function Notes({ state, dispatch }) {
+  const [activeId, setActiveId] = useState(state.notes[0]?.id);
+  const note = state.notes.find(n => n.id === activeId);
+  const [title, setTitle] = useState(note?.title || '');
+  const [content, setContent] = useState(note?.content || '');
+
+  useEffect(() => {
+    setTitle(note?.title || '');
+    setContent(note?.content || '');
+  }, [activeId]);
+
+  function save() {
+    if (note) dispatch({ type: 'update-note', id: note.id, title, content });
+  }
+
+  function add() {
+    const n = { id: Date.now(), title: 'Untitled', content: '', subject: 'General', date: new Date().toISOString().slice(0, 10) };
+    dispatch({ type: 'add-note', note: n });
+    setActiveId(n.id);
+  }
+
   return (
-    <div className="content-inner">
-      <div className="t-eyebrow" style={{ marginBottom: 8 }}>Write</div>
-      <h1 className="t-display" style={{ fontSize: 36, marginBottom: 24 }}>Notes</h1>
-      <p style={{ color: "var(--ink-3)" }}>Your personal study notes, with Markdown support.</p>
+    <div className="grid" style={{ gridTemplateColumns: '260px 1fr', gap: 18, height: 'calc(100vh - var(--top-h) - 56px)' }}>
+      <div className="card card-flush" style={{ display: 'flex', flexDirection: 'column' }}>
+        <div className="row" style={{ padding: '14px 14px 10px', justifyContent: 'space-between' }}>
+          <div className="t-eyebrow">Notes</div>
+          <button className="btn is-quiet is-sm" onClick={add}><Icon name="plus" size={12} className="" /></button>
+        </div>
+        <div className="scroll-area" style={{ flex: 1, padding: '0 8px 12px' }}>
+          {state.notes.map(n => (
+            <button
+              key={n.id}
+              className="lift"
+              style={{ width: '100%', textAlign: 'left', padding: '10px 12px', borderRadius: 8, background: n.id === activeId ? 'var(--paper-2)' : 'transparent', border: 0, marginBottom: 2, cursor: 'default' }}
+              onClick={() => { save(); setActiveId(n.id); }}
+            >
+              <div style={{ fontSize: 13.5, fontWeight: 500, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{n.title}</div>
+              <div className="muted" style={{ fontSize: 11.5, marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{n.subject} · {n.date}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="card" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        {note ? (
+          <>
+            <input
+              className="input"
+              value={title}
+              onChange={e => setTitle(e.target.value)}
+              onBlur={save}
+              style={{ border: 0, background: 'transparent', fontFamily: 'var(--f-display)', fontSize: 36, padding: 0, height: 'auto', letterSpacing: '-0.02em' }}
+            />
+            <div className="row" style={{ gap: 8, marginTop: 6, marginBottom: 14 }}>
+              <span className="chip">{note.subject}</span>
+              <span className="muted" style={{ fontSize: 12 }}>{note.date}</span>
+              <div className="spacer" />
+              <span className="muted" style={{ fontSize: 12 }}>{content.trim().split(/\s+/).filter(Boolean).length} words</span>
+            </div>
+            <textarea
+              className="input scroll-area"
+              value={content}
+              onChange={e => setContent(e.target.value)}
+              onBlur={save}
+              placeholder="Start writing…"
+              style={{ flex: 1, border: 0, background: 'transparent', padding: 0, fontFamily: 'var(--f-body)', fontSize: 15, lineHeight: 1.7, resize: 'none' }}
+            />
+          </>
+        ) : (
+          <div className="muted" style={{ display: 'grid', placeItems: 'center', height: '100%' }}>No note selected.</div>
+        )}
+      </div>
     </div>
   );
 }
-
-export default ScreenNotes;
