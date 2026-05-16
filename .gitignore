@@ -1,4 +1,9 @@
 backend/app/__pycache__
 backend/**/__pycache__
+backend/.env
+backend/*.db
 frontend/node_modules
 frontend/dist
+frontend/screenshots
+.DS_Store
+*.pyc
