@@ -1,0 +1,9 @@
+{
+  "name": "DocMind",
+  "description": "DocMind is an AI-powered learning assistant to help you manage documents, generate quizzes, chat with an AI tutor, and collaborate in study groups. It features a sleek, modern interface with light and dark modes.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "prompt": ""
+}
