@@ -5,7 +5,7 @@ from datetime import date
 from app.core.deps import get_db, get_current_user
 from app.models.orm import User, Quiz, Document
 from app.schemas.schemas import QuizCreate, QuizGenerateRequest, QuizOut
-from app.services import ai
+from app.services import generators
 
 router = APIRouter()
 
@@ -31,7 +31,7 @@ def get_quiz(
 
 
 @router.post("/generate", response_model=QuizOut)
-def generate_quiz(
+async def generate_quiz(
     req: QuizGenerateRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -46,7 +46,7 @@ def generate_quiz(
             content = doc.content or ""
             title = f"Quiz: {doc.name}"
 
-    questions = ai.generate_quiz(content, count=req.count, difficulty=req.difficulty)
+    questions = await generators.generate_quiz(content, count=req.count, difficulty=req.difficulty)
 
     # Return a transient (unsaved) QuizOut — client calls POST /quizzes to save
     return QuizOut(

@@ -4,7 +4,7 @@ from typing import List
 from app.core.deps import get_db, get_current_user
 from app.models.orm import User, QuickReviseSession, Document
 from app.schemas.schemas import QuickReviseGenerateRequest, QuickReviseOut
-from app.services import ai
+from app.services import generators
 
 router = APIRouter()
 
@@ -32,7 +32,7 @@ def get_quick_revise_session(
 
 
 @router.post("/generate", response_model=QuickReviseOut)
-def generate_quick_revise(
+async def generate_quick_revise(
     req: QuickReviseGenerateRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -43,7 +43,7 @@ def generate_quick_revise(
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    points = ai.generate_quick_revise(doc.content or "")
+    points = await generators.generate_quick_revise(doc.content or "")
 
     session = QuickReviseSession(
         user_id=current_user.id,

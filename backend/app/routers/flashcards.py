@@ -4,7 +4,7 @@ from typing import List
 from app.core.deps import get_db, get_current_user
 from app.models.orm import User, FlashcardSet, Document
 from app.schemas.schemas import FlashcardSetGenerateRequest, FlashcardSetOut
-from app.services import ai
+from app.services import generators
 
 router = APIRouter()
 
@@ -32,7 +32,7 @@ def get_flashcard_set(
 
 
 @router.post("/generate", response_model=FlashcardSetOut)
-def generate_flashcard_set(
+async def generate_flashcard_set(
     req: FlashcardSetGenerateRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -43,7 +43,7 @@ def generate_flashcard_set(
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    cards = ai.generate_flashcards(doc.content or "")
+    cards = await generators.generate_flashcards(doc.content or "")
 
     fs = FlashcardSet(
         user_id=current_user.id,

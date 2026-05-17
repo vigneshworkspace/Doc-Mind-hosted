@@ -4,7 +4,7 @@ from typing import List
 from app.core.deps import get_db, get_current_user
 from app.models.orm import User, AudioRecap, Document
 from app.schemas.schemas import AudioRecapGenerateRequest, AudioRecapOut
-from app.services import ai
+from app.services import generators
 
 router = APIRouter()
 
@@ -32,7 +32,7 @@ def get_audio_recap(
 
 
 @router.post("/generate", response_model=AudioRecapOut)
-def generate_audio_recap(
+async def generate_audio_recap(
     req: AudioRecapGenerateRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -43,7 +43,7 @@ def generate_audio_recap(
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    summary, script = ai.generate_audio_recap(doc.content or "")
+    summary, script = await generators.generate_audio_recap(doc.content or "")
 
     recap = AudioRecap(
         user_id=current_user.id,

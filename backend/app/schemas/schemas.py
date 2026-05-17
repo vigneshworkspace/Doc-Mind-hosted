@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 from pydantic import BaseModel, ConfigDict
 from typing import Optional, List, Any
-import datetime
+from datetime import date, datetime
 
 
 # ── Auth ──────────────────────────────────────────────────────

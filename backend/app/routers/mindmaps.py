@@ -4,7 +4,7 @@ from typing import List
 from app.core.deps import get_db, get_current_user
 from app.models.orm import User, MindMap, Document
 from app.schemas.schemas import MindMapGenerateRequest, MindMapOut
-from app.services import ai
+from app.services import generators
 
 router = APIRouter()
 
@@ -30,7 +30,7 @@ def get_mindmap(
 
 
 @router.post("/generate", response_model=MindMapOut)
-def generate_mindmap(
+async def generate_mindmap(
     req: MindMapGenerateRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -41,7 +41,7 @@ def generate_mindmap(
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    root = ai.generate_mindmap(doc.content or "")
+    root = await generators.generate_mindmap(doc.content or "")
 
     mm = MindMap(
         user_id=current_user.id,
