@@ -3,9 +3,9 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List
 from app.core.deps import get_db, get_current_user
-from app.models.orm import User, ChatHistory, Document
+from app.models.orm import User, ChatHistory
 from app.schemas.schemas import ChatCompleteRequest, ChatCompleteResponse, ChatHistoryOut
-from app.services import generators
+from app.services.rag_pipeline import answer, stream_answer
 
 router = APIRouter()
 
@@ -16,27 +16,16 @@ async def complete(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    context = ""
-    if req.document_id:
-        doc = db.query(Document).filter(
-            Document.id == req.document_id, Document.user_id == current_user.id
-        ).first()
-        if doc and doc.content:
-            context = doc.content
-
     messages = [{"role": m.role, "content": m.content} for m in req.messages]
-    reply = await generators.chat_complete(messages, context=context)
-
-    history_messages = messages + [{"role": "assistant", "content": reply}]
-    chat_record = ChatHistory(
+    query = messages[-1]["content"] if messages else ""
+    reply = await answer(query=query, messages=messages, db=db, user_id=current_user.id, document_id=req.document_id)
+    db.add(ChatHistory(
         user_id=current_user.id,
         document_id=req.document_id,
-        messages=history_messages,
-    )
-    db.add(chat_record)
+        messages=messages + [{"role": "assistant", "content": reply}],
+    ))
     db.commit()
-
-    return ChatCompleteResponse(content=reply, model="docmind")
+    return ChatCompleteResponse(content=reply, model="docmind-rag")
 
 
 @router.post("/stream")
@@ -45,19 +34,11 @@ async def stream_complete(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """SSE streaming endpoint. Returns text/event-stream."""
-    context = ""
-    if req.document_id:
-        doc = db.query(Document).filter(
-            Document.id == req.document_id, Document.user_id == current_user.id
-        ).first()
-        if doc and doc.content:
-            context = doc.content
-
     messages = [{"role": m.role, "content": m.content} for m in req.messages]
+    query = messages[-1]["content"] if messages else ""
 
     async def event_stream():
-        async for chunk in generators.stream_chat_complete(messages, context=context):
+        async for chunk in stream_answer(query=query, messages=messages, db=db, user_id=current_user.id, document_id=req.document_id):
             yield f"data: {chunk}\n\n"
         yield "data: [DONE]\n\n"
 

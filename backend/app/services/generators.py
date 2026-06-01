@@ -58,6 +58,36 @@ class _ReviseList(BaseModel):
     points: List[_RevisePoint]
 
 
+class _VisualStep(BaseModel):
+    step: str
+
+
+class _VisualSolution(BaseModel):
+    problem: str
+    steps: List[str]
+    result: str
+
+
+class _Diagram(BaseModel):
+    mermaid: str
+
+
+class _Concept(BaseModel):
+    mermaid: str
+    explanation: str
+
+
+class _YTChapter(BaseModel):
+    timestamp: str
+    title: str
+
+
+class _YTSummary(BaseModel):
+    summary: str
+    chapters: List[_YTChapter]
+    key_points: List[str]
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _provider():
@@ -204,6 +234,100 @@ async def generate_quick_revise(content: str) -> list[dict]:
         return [p.model_dump() for p in result.points]
     except Exception:
         return _mock_revise_points()
+
+
+def _strip_mermaid_fences(text: str) -> str:
+    """Remove markdown code fences an LLM may wrap around mermaid output."""
+    t = text.strip()
+    if t.startswith("```"):
+        t = t.split("\n", 1)[1] if "\n" in t else t
+        t = t.replace("```mermaid", "").replace("```", "")
+    return t.strip()
+
+
+async def solve_visual(image_bytes: bytes, mime_type: str, prompt: str = "") -> dict:
+    """Vision: solve a problem from an uploaded image. Gemini multimodal."""
+    try:
+        provider = _provider()
+        user_text = prompt or "Solve the problem in this image. Show clear step-by-step working."
+        result = await provider.structured_output(
+            messages=[{
+                "role": "user",
+                "content": user_text,
+                "files": [{"mime_type": mime_type, "data": image_bytes}],
+            }],
+            schema=_VisualSolution,
+            system_prompt="You are a patient tutor. Read the image, identify the problem, solve it step by step. Return valid JSON only.",
+        )
+        return result.model_dump()
+    except Exception:
+        return {
+            "problem": "Could not read the image.",
+            "steps": ["Make sure the image is clear and contains a solvable problem."],
+            "result": "N/A",
+        }
+
+
+async def generate_diagram(prompt: str, style: str = "flowchart") -> str:
+    """Prompt -> Mermaid diagram source string."""
+    try:
+        provider = _provider()
+        result = await provider.structured_output(
+            messages=[{
+                "role": "user",
+                "content": f"Create a Mermaid {style} diagram for: {prompt}\n\nReturn the mermaid source in the 'mermaid' field.",
+            }],
+            schema=_Diagram,
+            system_prompt="You are a diagram expert. Output ONLY valid Mermaid syntax in the mermaid field. No markdown fences, no prose.",
+        )
+        return _strip_mermaid_fences(result.mermaid)
+    except Exception:
+        return f"flowchart TD\n    A[{prompt[:40]}] --> B[Diagram unavailable]"
+
+
+async def visualize_concept(concept: str) -> dict:
+    """Concept -> Mermaid graph + short explanation."""
+    try:
+        provider = _provider()
+        result = await provider.structured_output(
+            messages=[{
+                "role": "user",
+                "content": f"Visualize the concept '{concept}' as a Mermaid graph (graph TD or mindmap). Add a 2-sentence explanation.",
+            }],
+            schema=_Concept,
+            system_prompt="You explain concepts visually. mermaid field = valid Mermaid source (no fences). explanation field = 2 sentences.",
+        )
+        return {"mermaid": _strip_mermaid_fences(result.mermaid), "explanation": result.explanation}
+    except Exception:
+        return {
+            "mermaid": f"graph TD\n    A[{concept[:30]}] --> B[Key idea]\n    A --> C[Application]",
+            "explanation": f"A visual overview of {concept}.",
+        }
+
+
+async def summarize_youtube(transcript: str) -> dict:
+    """Transcript -> summary + chapters + key points."""
+    try:
+        provider = _provider()
+        result = await provider.structured_output(
+            messages=[{
+                "role": "user",
+                "content": (
+                    "Summarise this video transcript. Provide: a 150-word summary, "
+                    "chapter markers (timestamp + title), and 5 key points.\n\n"
+                    f"Transcript:\n{_truncate(transcript, tokens=6000)}"
+                ),
+            }],
+            schema=_YTSummary,
+            system_prompt="You summarise educational videos. Return valid JSON only.",
+        )
+        return result.model_dump()
+    except Exception:
+        return {
+            "summary": "Summary unavailable — transcript could not be processed.",
+            "chapters": [],
+            "key_points": [],
+        }
 
 
 # ── Mock fallbacks (used when no LLM provider available) ─────────────────────

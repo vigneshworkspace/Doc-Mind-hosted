@@ -1,6 +1,6 @@
 from datetime import date, datetime
 from sqlalchemy import (
-    Boolean, Column, Date, DateTime, ForeignKey, Integer, JSON, String, Text, func
+    BigInteger, Boolean, Column, Date, DateTime, ForeignKey, Integer, JSON, String, Text, func
 )
 from sqlalchemy.orm import relationship
 from app.db.base import Base
@@ -36,6 +36,14 @@ class Document(Base):
     upload_date = Column(Date, server_default=func.current_date())
     tags = Column(JSON, default=list)
     content = Column(Text)
+    file_path = Column(String(500), nullable=True)
+    parsed_md = Column(Text)
+    outline = Column(JSON, default=list)
+    page_count = Column(Integer, nullable=True)
+    token_count = Column(Integer, nullable=True)
+    summary = Column(Text)
+    section_summaries = Column(JSON, default=list)
+    processing_status = Column(String(20), default="queued")
 
     owner = relationship("User", back_populates="documents")
 
@@ -86,6 +94,7 @@ class AudioRecap(Base):
     source_document_id = Column(Integer, ForeignKey("documents.id"), nullable=True)
     summary = Column(Text)
     script = Column(JSON, default=list)
+    processing_status = Column(String(20), default="queued")
 
     owner = relationship("User", back_populates="audio_recaps")
 
@@ -148,6 +157,22 @@ class ActivityLog(Base):
     date = Column(Date, server_default=func.current_date())
 
     user = relationship("User", back_populates="activity_logs")
+
+
+class Chunk(Base):
+    __tablename__ = "chunks"
+    id = Column(BigInteger, primary_key=True)
+    document_id = Column(Integer, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    section_id = Column(String(200), nullable=True)
+    page_start = Column(Integer, nullable=True)
+    page_end = Column(Integer, nullable=True)
+    position = Column(Integer, nullable=False, default=0)
+    raw_text = Column(Text, nullable=False)
+    context = Column(Text, nullable=False, default="")
+    contextualized_text = Column(Text, nullable=False)
+    embedding_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
 
 
 class ChatHistory(Base):

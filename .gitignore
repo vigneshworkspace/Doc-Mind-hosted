@@ -1,7 +1,16 @@
 backend/app/__pycache__
 backend/**/__pycache__
 backend/.env
+**/.env
 backend/*.db
+
+# Secrets — API keys
+backend/app/services/ai/data/gemini_keys.json
+**/gemini_keys.json
+*.key
+
+# User data / uploads
+backend/data/
 frontend/node_modules
 frontend/dist
 frontend/screenshots

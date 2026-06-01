@@ -3,6 +3,7 @@ uvicorn[standard]>=0.30.0
 python-multipart>=0.0.9
 pydantic>=2.7.0
 pydantic-settings>=2.2.0
+python-dotenv>=1.0.0
 python-jose[cryptography]>=3.3.0
 bcrypt>=4.0.0
 sqlalchemy>=2.0.0
@@ -31,10 +32,17 @@ sentence-transformers>=3.0.0
 # Streaming
 sse-starlette>=2.1.0
 
-# Voice
+# Voice — STT (faster-whisper) + local Coqui TTS fallback (VibeVoice preferred when up)
+fastrtc>=0.0.20
 faster-whisper>=1.0.0
 numpy>=1.26.0
 soundfile>=0.12.0
+torch>=2.2.0
+torchaudio>=2.2.0
+torchcodec>=0.1.0
+coqui-tts>=0.27.0
+# coqui-tts 0.27 breaks on transformers>=5 (isin_mps_friendly removed) — pin to 4.x
+transformers>=4.57,<5
 
 # Optional tracing
 langsmith>=0.1.0

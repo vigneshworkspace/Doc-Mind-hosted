@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Icon } from '../components/Shell';
+import { quizzes as quizzesApi } from '../api/index.js';
 
 const SAMPLE_QUIZ_QUESTIONS = [
   { questionText: "What does 'quantization' mean in quantum physics?", options: ["Energy comes in discrete packets", "Particles always move", "Light is a continuous wave only", "Mass is the same as energy"], correctAnswer: "Energy comes in discrete packets", explanation: "Quantization means certain physical quantities can only take on specific, discrete values rather than any value along a continuum." },
@@ -15,13 +16,30 @@ function ScreenQuiz({ state, dispatch, setTab }) {
   const [questions, setQuestions] = useState([]);
   const [idx, setIdx] = useState(0);
   const [answers, setAnswers] = useState({});
+  const [generating, setGenerating] = useState(false);
 
-  function startQuiz() {
-    const qs = SAMPLE_QUIZ_QUESTIONS.slice(0, config.count);
-    setQuestions(qs);
-    setIdx(0);
-    setAnswers({});
-    setMode("taking");
+  // Mount: load real quiz list (fallback: keep mock quizzes)
+  useEffect(() => {
+    quizzesApi.list()
+      .then(qs => dispatch({ type: 'set-quizzes', quizzes: qs }))
+      .catch(() => { /* keep mock quizzes */ });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function startQuiz() {
+    setGenerating(true);
+    try {
+      const result = await quizzesApi.generate(config.docId || null, config.count, config.difficulty);
+      const qs = Array.isArray(result) ? result : result.questions;
+      setQuestions(qs && qs.length ? qs : SAMPLE_QUIZ_QUESTIONS.slice(0, config.count));
+    } catch {
+      // Fallback to local sample questions
+      setQuestions(SAMPLE_QUIZ_QUESTIONS.slice(0, config.count));
+    } finally {
+      setGenerating(false);
+      setIdx(0);
+      setAnswers({});
+      setMode("taking");
+    }
   }
 
   function answer(opt) {
@@ -31,11 +49,16 @@ function ScreenQuiz({ state, dispatch, setTab }) {
   function finish() {
     const correct = questions.filter((q, i) => answers[i] === q.correctAnswer).length;
     const score = Math.round((correct / questions.length) * 100);
-    dispatch({ type: "add-quiz", quiz: {
-      id: Date.now(), title: `Practice — ${new Date().toLocaleDateString()}`,
-      questions, completed: true, score, date: new Date().toISOString().slice(0, 10)
-    }});
+    const quizData = {
+      title: `Practice — ${new Date().toLocaleDateString()}`,
+      questions, completed: true, score,
+      date: new Date().toISOString().slice(0, 10),
+    };
+    // Optimistic local update
+    dispatch({ type: "add-quiz", quiz: { id: Date.now(), ...quizData } });
     setMode("result");
+    // Persist to backend (fire-and-forget)
+    quizzesApi.save(quizData).catch(() => {});
   }
 
   if (mode === "config") return (
@@ -84,8 +107,8 @@ function ScreenQuiz({ state, dispatch, setTab }) {
                 <span>3</span><span>4</span><span>5</span>
               </div>
             </div>
-            <button className="btn is-accent is-lg" onClick={startQuiz}>
-              <Icon name="sparkles" size={14} className="" /> Generate & start
+            <button className="btn is-accent is-lg" onClick={startQuiz} disabled={generating}>
+              <Icon name="sparkles" size={14} className="" /> {generating ? 'Generating…' : 'Generate & start'}
             </button>
           </div>
         </div>

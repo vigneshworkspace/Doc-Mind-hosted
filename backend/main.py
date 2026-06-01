@@ -14,8 +14,12 @@ from app.routers import (
     groups,
     history,
     user_settings,
+    visual_ai,
+    diagrams,
+    concepts,
 )
 from app.youtube_transcript import router as youtube_router
+from app.voice.router import router as voice_router, get_fastrtc_app
 
 app = FastAPI(title="DocMind API", version="0.1.0")
 
@@ -66,7 +70,21 @@ app.include_router(notes.router, prefix="/api/v1/notes", tags=["notes"])
 app.include_router(groups.router, prefix="/api/v1/groups", tags=["groups"])
 app.include_router(history.router, prefix="/api/v1/history", tags=["history"])
 app.include_router(user_settings.router, prefix="/api/v1/settings", tags=["settings"])
+app.include_router(visual_ai.router, prefix="/api/v1/visual-ai", tags=["visual-ai"])
+app.include_router(diagrams.router, prefix="/api/v1/diagrams", tags=["diagrams"])
+app.include_router(concepts.router, prefix="/api/v1/concepts", tags=["concepts"])
 app.include_router(youtube_router, tags=["youtube"])
+app.include_router(voice_router, prefix="/api/v1/voice", tags=["voice"])
+
+
+@app.on_event("startup")
+async def _mount_fastrtc():
+    rtc = get_fastrtc_app()
+    if rtc is not None:
+        try:
+            app.mount("/voice-stream", rtc)
+        except Exception:
+            pass
 
 
 @app.get("/health")

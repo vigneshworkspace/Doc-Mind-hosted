@@ -125,6 +125,25 @@ async def health_check():
     return {"status": "healthy", "service": "youtube_transcript"}
 
 
+class SummarizeRequest(BaseModel):
+    video_url: str
+    languages: Optional[List[str]] = ["en"]
+
+
+@router.post("/summarize")
+async def summarize(request: SummarizeRequest):
+    result = await youtube_service.get_transcript(
+        video_url=request.video_url,
+        languages=request.languages,
+        format_type="text",
+    )
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error", "transcript failed"))
+    from app.services import generators
+    summary = await generators.summarize_youtube(result.get("transcript", ""))
+    return {"video_id": result.get("video_id"), "transcript": result.get("transcript", ""), **summary}
+
+
 @router.post("/generate-cookies")
 async def generate_cookies(video_url: str = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"):
     """

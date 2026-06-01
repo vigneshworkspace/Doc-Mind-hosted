@@ -1,9 +1,39 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Icon } from '../components/Shell';
+import { quickRevise as quickReviseApi } from '../api/index.js';
 
-function ScreenQuickRevise({ state }) {
+function ScreenQuickRevise({ state, dispatch }) {
   const [active, setActive] = useState(state.quickReviseSessions[0]);
   const [expanded, setExpanded] = useState({});
+  const [generating, setGenerating] = useState(false);
+
+  // Mount: load sessions (fallback: keep mock sessions)
+  useEffect(() => {
+    quickReviseApi.list()
+      .then(sessions => {
+        if (Array.isArray(sessions) && sessions.length) {
+          dispatch?.({ type: 'set-quick-revise-sessions', quickReviseSessions: sessions });
+          setActive(a => a || sessions[0]);
+        }
+      })
+      .catch(() => { /* keep mock sessions */ });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function handleGenerate() {
+    const docId = state.documents[0]?.id ?? null;
+    setGenerating(true);
+    try {
+      const session = await quickReviseApi.generate(docId);
+      dispatch?.({ type: 'set-quick-revise-sessions', quickReviseSessions: [session, ...state.quickReviseSessions] });
+      setActive(session);
+    } catch (err) {
+      console.error('Quick revise generation failed:', err.message);
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  const points = active?.points || [];
 
   return (
     <div className="col" style={{gap: 24, maxWidth: 820, margin: "0 auto", width: "100%"}}>
@@ -12,13 +42,18 @@ function ScreenQuickRevise({ state }) {
         <p>The TL;DR of any document — read in two minutes, expand for depth, move on.</p>
       </div>
       <div className="row" style={{justifyContent: "space-between"}}>
-        <select className="input" style={{width: "auto", maxWidth: 360}} value={active.id} onChange={e => setActive(state.quickReviseSessions.find(s => s.id === +e.target.value))}>
+        <select className="input" style={{width: "auto", maxWidth: 360}} value={active?.id ?? ''} onChange={e => setActive(state.quickReviseSessions.find(s => String(s.id) === e.target.value))}>
           {state.quickReviseSessions.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}
         </select>
-        <div className="chip">{active.points.length} key points</div>
+        <div className="row" style={{gap: 8}}>
+          <div className="chip">{points.length} key points</div>
+          <button className="btn is-accent is-sm" onClick={handleGenerate} disabled={generating}>
+            <Icon name="plus" size={12} className="" /> {generating ? 'Generating…' : 'New'}
+          </button>
+        </div>
       </div>
       <div className="col" style={{gap: 14}}>
-        {active.points.map((p, i) => (
+        {points.map((p, i) => (
           <div key={i} className="card">
             <div className="row" style={{justifyContent: "space-between", alignItems: "flex-start", gap: 14}}>
               <div style={{flex: 1}}>

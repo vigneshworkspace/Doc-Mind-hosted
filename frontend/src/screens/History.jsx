@@ -1,6 +1,17 @@
+import { useEffect } from 'react';
 import { Icon } from '../components/Shell.jsx';
+import { history as historyApi } from '../api/index.js';
 
-export default function History({ state, setTab }) {
+export default function History({ state, dispatch, setTab }) {
+  // Mount: load activity history. Backend returns {id, date}[] objects, but
+  // state.activityLog is string[] (date strings), so map before dispatch
+  // (CORRECTIONS P6 issue 3).
+  useEffect(() => {
+    historyApi.list()
+      .then(evts => dispatch?.({ type: 'set-history', history: (evts || []).map(e => e.date) }))
+      .catch(() => { /* keep mock activity log */ });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const events = [
     ...state.quizzes.map(q => ({ kind: 'quiz-generator', id: q.id, title: q.title, date: q.date, meta: q.completed ? `${q.score}%` : 'in progress', icon: 'quiz-generator' })),
     ...state.flashcardSets.map(f => ({ kind: 'flashcards', id: f.id, title: f.title, date: f.date, meta: `${f.cards.length} cards`, icon: 'flashcards' })),

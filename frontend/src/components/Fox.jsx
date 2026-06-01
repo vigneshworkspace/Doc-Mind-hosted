@@ -35,8 +35,6 @@ const FOX_MOODS = {
 function FoxCompanion({ tab, accent, hidden, foxIndex }) {
   const [mood, setMood] = useState("idle");
   const [bubble, setBubble] = useState(null);
-  const [lookX, setLookX] = useState(0);
-  const [lookY, setLookY] = useState(0);
   const lastTab = useRef(tab);
   const idleRef = useRef(null);
 
@@ -74,19 +72,6 @@ function FoxCompanion({ tab, accent, hidden, foxIndex }) {
     return () => { cancelled = true; clearTimeout(idleRef.current); };
   }, []);
 
-  // eye tracking
-  useEffect(() => {
-    function onMove(e) {
-      const dx = e.clientX - (window.innerWidth - 50);
-      const dy = e.clientY - (window.innerHeight - 50);
-      const d = Math.hypot(dx, dy) || 1;
-      setLookX(Math.max(-1.4, Math.min(1.4, dx / d * 1.4)));
-      setLookY(Math.max(-1, Math.min(1, dy / d * 1)));
-    }
-    window.addEventListener('mousemove', onMove);
-    return () => window.removeEventListener('mousemove', onMove);
-  }, []);
-
   function onClick() {
     setMood("proud");
     const lines = FOX_LINES[tab] || ["Hi!"];
@@ -107,6 +92,7 @@ function FoxCompanion({ tab, accent, hidden, foxIndex }) {
       <button
         className="fox-body"
         onClick={onClick}
+        tabIndex={-1}
         style={{
           background: "none",
           border: "none",

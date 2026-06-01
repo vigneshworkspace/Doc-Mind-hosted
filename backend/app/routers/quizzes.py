@@ -6,6 +6,7 @@ from app.core.deps import get_db, get_current_user
 from app.models.orm import User, Quiz, Document
 from app.schemas.schemas import QuizCreate, QuizGenerateRequest, QuizOut
 from app.services import generators
+from app.services.generators import get_doc_context
 
 router = APIRouter()
 
@@ -43,7 +44,7 @@ async def generate_quiz(
             Document.id == req.document_id, Document.user_id == current_user.id
         ).first()
         if doc:
-            content = doc.content or ""
+            content = get_doc_context(doc)
             title = f"Quiz: {doc.name}"
 
     questions = await generators.generate_quiz(content, count=req.count, difficulty=req.difficulty)

@@ -170,7 +170,7 @@ function ScreenDashboard({ state, setTab, dispatch }) {
         </div>
         <div className="card card-flush">
           {state.documents.map((d, i) => (
-            <button key={d.id} className="lift" style={{display: "grid", gridTemplateColumns: "auto auto 1fr auto auto auto", gap: 18, alignItems: "center", padding: "14px 22px", width: "100%", textAlign: "left", background: "transparent", border: 0, borderBottom: i === state.documents.length - 1 ? 0 : "1px solid var(--hairline)", cursor: "default"}} onClick={() => setTab("pdf-qa")}>
+            <div key={d.id} className="lift" role="button" tabIndex={0} style={{display: "grid", gridTemplateColumns: "auto auto 1fr auto auto auto", gap: 18, alignItems: "center", padding: "14px 22px", width: "100%", textAlign: "left", background: "transparent", border: 0, borderBottom: i === state.documents.length - 1 ? 0 : "1px solid var(--hairline)", cursor: "default"}} onClick={() => setTab("pdf-qa")}>
               <span className="t-mono" style={{color: "var(--ink-4)", fontSize: 11, width: 24}}>{String(i+1).padStart(2,"0")}</span>
               <DocIcon ext={d.type} />
               <div>
@@ -182,7 +182,7 @@ function ScreenDashboard({ state, setTab, dispatch }) {
               </div>
               <button className="btn is-quiet is-sm" onClick={(e) => { e.stopPropagation(); setTab("quiz-generator"); }}>Quiz</button>
               <Icon name="chevR" size={14} className="" />
-            </button>
+            </div>
           ))}
         </div>
       </div>

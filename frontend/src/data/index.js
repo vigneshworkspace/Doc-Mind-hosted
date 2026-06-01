@@ -107,6 +107,7 @@ export const initialState = {
     aiProvider: 'gemini',
     ollamaEndpoint: 'http://localhost:11434',
   },
+  loading: {},
 };
 
 export function reducer(state, action) {
@@ -117,8 +118,25 @@ export function reducer(state, action) {
     case 'add-note': return { ...state, notes: [action.note, ...state.notes] };
     case 'update-note': return { ...state, notes: state.notes.map(n => n.id === action.id ? { ...n, title: action.title, content: action.content } : n) };
     case 'add-group': return { ...state, studyGroups: [action.group, ...state.studyGroups] };
+    case 'delete-note': return { ...state, notes: state.notes.filter(n => n.id !== action.id) };
     case 'set-settings': return { ...state, settings: { ...state.settings, ...action.patch } };
     case 'set-user': return { ...state, user: { ...state.user, ...action.patch } };
+
+    // ── Bulk-replace actions (from API responses) ─────────────
+    case 'set-documents': return { ...state, documents: action.documents };
+    case 'set-quizzes': return { ...state, quizzes: action.quizzes };
+    case 'set-flashcard-sets': return { ...state, flashcardSets: action.flashcardSets };
+    case 'set-mind-maps': return { ...state, mindMaps: action.mindMaps };
+    case 'set-audio-recaps': return { ...state, audioRecaps: action.audioRecaps };
+    case 'set-quick-revise-sessions': return { ...state, quickReviseSessions: action.quickReviseSessions };
+    case 'set-notes': return { ...state, notes: action.notes };
+    case 'set-groups': return { ...state, studyGroups: action.studyGroups };
+    case 'set-settings-full': return { ...state, settings: action.settings };
+    case 'set-history': return { ...state, activityLog: action.history };
+
+    // ── Loading flag ──────────────────────────────────────────
+    case 'set-loading': return { ...state, loading: { ...(state.loading || {}), [action.key]: action.loading } };
+
     default: return state;
   }
 }

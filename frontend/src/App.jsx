@@ -1,15 +1,18 @@
-import { useState, useEffect, useReducer } from 'react';
+import { useState, useEffect, useReducer, useMemo } from 'react';
 import { initialState, reducer } from './data/index.js';
 import useTweaks from './hooks/useTweaks.js';
 import TweaksPanel, { TweakSection, TweakToggle, TweakColor, TweakRadio } from './components/TweaksPanel.jsx';
 import { Sidebar, TopBar, CommandPalette } from './components/Shell.jsx';
 import FoxCompanion from './components/Fox.jsx';
+import LoaderHelix from './components/LoaderHelix.jsx';
 import AuthScreen from './components/Auth.jsx';
+import { getToken, clearToken } from './api/client.js';
+import { auth as authApi } from './api/index.js';
 
-// Lazy screen imports
+// Dashboard is the landing screen — keep it static so first paint needs no
+// extra round-trip. Every other screen (including the heavy AIChat) is loaded
+// on demand via useScreen below.
 import Dashboard from './screens/Dashboard.jsx';
-import Library from './screens/Library.jsx';
-import AIChat from './screens/AIChat.jsx';
 
 const TWEAK_DEFAULTS = {
   accentPalette: ["#4F6BED", "#2DB48A", "#E8B43E", "#ffffff", "#18181b"],
@@ -40,32 +43,36 @@ const TYPE_PAIRS = {
   "mono-led":           { display: '"JetBrains Mono", monospace', body: '"Inter Tight", sans-serif' },
 };
 
+// Static loader map, hoisted to module scope so it isn't rebuilt every effect.
+const SCREEN_LOADERS = {
+  documents:      () => import('./screens/Library.jsx'),
+  'ai-chat':      () => import('./screens/AIChat.jsx'),
+  quiz:           () => import('./screens/Quiz.jsx'),
+  flashcards:     () => import('./screens/Flashcards.jsx'),
+  'mind-map':     () => import('./screens/MindMap.jsx'),
+  'ai-diagram-maker': () => import('./screens/DiagramMaker.jsx'),
+  'concept-visualizer': () => import('./screens/ConceptVisualizer.jsx'),
+  'audio-recap':  () => import('./screens/AudioRecap.jsx'),
+  'quick-revise': () => import('./screens/QuickRevise.jsx'),
+  'pdf-qa':       () => import('./screens/PdfQA.jsx'),
+  'visual-ai':    () => import('./screens/VisualAI.jsx'),
+  'voice-chat':   () => import('./screens/VoiceChat.jsx'),
+  'study-notes':  () => import('./screens/Notes.jsx'),
+  'study-groups': () => import('./screens/Groups.jsx'),
+  pomodoro:       () => import('./screens/Pomodoro.jsx'),
+  history:        () => import('./screens/History.jsx'),
+  settings:       () => import('./screens/Settings.jsx'),
+  youtube:        () => import('./screens/YouTube.jsx'),
+};
+
 // Deferred screen loader — avoids a massive static import list at top
 function useScreen(tab) {
   const [screens, setScreens] = useState({});
   useEffect(() => {
-    const map = {
-      quiz:           () => import('./screens/Quiz.jsx'),
-      flashcards:     () => import('./screens/Flashcards.jsx'),
-      'mind-map':     () => import('./screens/MindMap.jsx'),
-      'ai-diagram-maker': () => import('./screens/DiagramMaker.jsx'),
-      'concept-visualizer': () => import('./screens/ConceptVisualizer.jsx'),
-      'audio-recap':  () => import('./screens/AudioRecap.jsx'),
-      'quick-revise': () => import('./screens/QuickRevise.jsx'),
-      'pdf-qa':       () => import('./screens/PdfQA.jsx'),
-      'visual-ai':    () => import('./screens/VisualAI.jsx'),
-      'voice-chat':   () => import('./screens/VoiceChat.jsx'),
-      'study-notes':  () => import('./screens/Notes.jsx'),
-      'study-groups': () => import('./screens/Groups.jsx'),
-      pomodoro:       () => import('./screens/Pomodoro.jsx'),
-      history:        () => import('./screens/History.jsx'),
-      settings:       () => import('./screens/Settings.jsx'),
-      youtube:        () => import('./screens/YouTube.jsx'),
-    };
-    if (map[tab] && !screens[tab]) {
-      map[tab]().then(m => setScreens(s => ({ ...s, [tab]: m.default })));
+    if (SCREEN_LOADERS[tab] && !screens[tab]) {
+      SCREEN_LOADERS[tab]().then(m => setScreens(s => ({ ...s, [tab]: m.default })));
     }
-  }, [tab]);
+  }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
   return screens;
 }
 
@@ -134,10 +141,37 @@ export default function App() {
     document.body.classList.toggle('is-regular', !t.density || t.density === 'regular');
   }, [t]);
 
+  // Session restore on mount — if a stored JWT validates, skip the login screen
+  useEffect(() => {
+    const token = getToken();
+    if (!token) return;
+    authApi.me()
+      .then(user => {
+        dispatch({ type: 'set-user', patch: user });
+        setLoggedIn(true);
+      })
+      .catch(() => {
+        // Token expired or invalid — stay on login screen
+        clearToken();
+      });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   function handleAuth(user) {
     dispatch({ type: 'set-user', patch: user });
     setLoggedIn(true);
   }
+
+  function handleLogout() {
+    clearToken();
+    setLoggedIn(false);
+    dispatch({ type: 'set-user', patch: { name: '', email: '' } });
+  }
+
+  // Must run before any early return — hooks can't be conditional.
+  const screenProps = useMemo(
+    () => ({ state, dispatch, setTab, pomodoro, setPomodoro }),
+    [state, pomodoro],
+  );
 
   if (!loggedIn) {
     return (
@@ -148,19 +182,16 @@ export default function App() {
     );
   }
 
-  const screenProps = { state, dispatch, setTab, pomodoro, setPomodoro };
-
   function renderScreen() {
-    switch (tab) {
-      case 'dashboard':  return <Dashboard {...screenProps} />;
-      case 'documents':  return <Library {...screenProps} />;
-      case 'ai-chat':    return <AIChat {...screenProps} />;
-      default: {
-        const Screen = screens[tab];
-        if (!Screen) return <div className="col" style={{ padding: 40, color: 'var(--ink-3)' }}>Loading…</div>;
-        return <Screen {...screenProps} />;
-      }
-    }
+    if (tab === 'dashboard') return <Dashboard {...screenProps} />;
+    const Screen = screens[tab];
+    if (!Screen) return (
+      <div className="col" style={{ display: 'grid', placeItems: 'center', padding: 80, gap: 16 }}>
+        <LoaderHelix dots={8} speed={1.8} variant="dna" />
+        <span style={{ color: 'var(--ink-4)', fontSize: 12, letterSpacing: 0.12, textTransform: 'uppercase', fontFamily: "'JetBrains Mono', monospace" }}>Loading</span>
+      </div>
+    );
+    return <Screen {...screenProps} />;
   }
 
   const flushTabs = ['ai-chat', 'pdf-qa'];
@@ -170,7 +201,7 @@ export default function App() {
       <Sidebar
         tab={tab}
         setTab={x => { setTab(x); setMobileOpen(false); }}
-        onLogout={() => setLoggedIn(false)}
+        onLogout={handleLogout}
         user={state.user}
       />
       <div className="main">
@@ -184,11 +215,11 @@ export default function App() {
           setPomodoro={setPomodoro}
           setTab={setTab}
           user={state.user}
-          onLogout={() => setLoggedIn(false)}
+          onLogout={handleLogout}
         />
-        <div className={`content${flushTabs.includes(tab) ? ' is-flush' : ''}`} key={tab}>
+        <main className={`content${flushTabs.includes(tab) ? ' is-flush' : ''}`} key={tab}>
           {renderScreen()}
-        </div>
+        </main>
       </div>
 
       <FoxCompanion tab={tab} accent={(t.accentPalette || PALETTES[0])[0]} hidden={!t.fox} />

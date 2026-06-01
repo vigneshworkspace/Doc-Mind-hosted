@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Icon } from '../components/Shell';
+import { audioRecaps as audioRecapsApi } from '../api/index.js';
 
 function Waveform({ playing, progress = 0 }) {
   const bars = useState(() => Array.from({length: 64}, (_, i) => {
@@ -17,14 +18,65 @@ function Waveform({ playing, progress = 0 }) {
   );
 }
 
-function ScreenAudioRecap({ state }) {
+function ScreenAudioRecap({ state, dispatch }) {
   const [active, setActive] = useState(state.audioRecaps[0]);
   const [playing, setPlaying] = useState(false);
   const [lineIdx, setLineIdx] = useState(0);
   const [position, setPosition] = useState(0);
+  const [pollId, setPollId] = useState(null);
+  const [generating, setGenerating] = useState(false);
+
+  // Mount: load existing recaps (fallback: keep mock recaps)
+  useEffect(() => {
+    audioRecapsApi.list()
+      .then(recaps => {
+        if (Array.isArray(recaps) && recaps.length) {
+          dispatch?.({ type: 'set-audio-recaps', audioRecaps: recaps });
+          setActive(a => a || recaps[0]);
+        }
+      })
+      .catch(() => { /* keep mock recaps */ });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Poll for recap readiness (CORRECTIONS P6 issue 2: processing_status field)
+  useEffect(() => {
+    if (!pollId) return;
+    const intervalId = setInterval(async () => {
+      try {
+        const recap = await audioRecapsApi.get(pollId);
+        if (recap.processing_status === 'ready') {
+          setPollId(null);
+          setGenerating(false);
+          audioRecapsApi.list().then(recaps =>
+            dispatch?.({ type: 'set-audio-recaps', audioRecaps: recaps })
+          ).catch(() => {});
+        }
+      } catch {
+        // keep polling
+      }
+    }, 3000);
+    return () => clearInterval(intervalId);
+  }, [pollId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function handleGenerate() {
+    const docId = state.documents[0]?.id ?? null;
+    setGenerating(true);
+    try {
+      const recap = await audioRecapsApi.generate(docId);
+      dispatch?.({ type: 'set-audio-recaps', audioRecaps: [recap, ...state.audioRecaps] });
+      if (recap.processing_status !== 'ready') {
+        setPollId(recap.id);
+      } else {
+        setGenerating(false);
+      }
+    } catch (err) {
+      setGenerating(false);
+      console.error('Audio recap generation failed:', err.message);
+    }
+  }
 
   useEffect(() => {
-    if (!playing) return;
+    if (!playing || !active?.script?.length) return;
     const total = active.script.length * 3.5;
     const id = setInterval(() => {
       setPosition(p => {
@@ -37,8 +89,10 @@ function ScreenAudioRecap({ state }) {
     return () => clearInterval(id);
   }, [playing, active]);
 
-  const total = active.script.length * 3.5;
+  const script = active?.script || [];
+  const total = script.length * 3.5;
   const mm = (s) => `${Math.floor(s/60)}:${String(Math.floor(s%60)).padStart(2, "0")}`;
+  const safeLine = script[lineIdx] || { speaker: 'Alex', dialogue: '' };
 
   return (
     <div className="col" style={{gap: 24}}>
@@ -52,9 +106,9 @@ function ScreenAudioRecap({ state }) {
           <div className="row" style={{justifyContent: "space-between", alignItems: "flex-start"}}>
             <div>
               <div className="t-eyebrow">Now playing</div>
-              <div className="t-display" style={{fontSize: 26, marginTop: 4}}>{active.title}</div>
+              <div className="t-display" style={{fontSize: 26, marginTop: 4}}>{active?.title}</div>
             </div>
-            <span className="chip">{active.script.length} turns · ~{Math.round(total)}s</span>
+            <span className="chip">{script.length} turns · ~{Math.round(total)}s</span>
           </div>
 
           <Waveform playing={playing} progress={position / total} />
@@ -66,18 +120,18 @@ function ScreenAudioRecap({ state }) {
 
           <div className="row" style={{justifyContent: "center", gap: 12}}>
             <button className="btn is-ghost is-icon" onClick={() => { setPosition(Math.max(0, position - 5)); setLineIdx(Math.max(0, Math.floor((position-5)/3.5))); }}><Icon name="chevL" size={16} className="" /></button>
-            <button className="btn is-accent" style={{width: 56, height: 56, borderRadius: 28}} onClick={() => setPlaying(p => !p)}>
+            <button className="btn is-accent" style={{width: 56, height: 56, borderRadius: 28}} onClick={() => setPlaying(p => !p)} disabled={!script.length}>
               <Icon name={playing ? "pause" : "play"} size={20} className="" />
             </button>
-            <button className="btn is-ghost is-icon" onClick={() => { setPosition(Math.min(total, position + 5)); setLineIdx(Math.min(active.script.length-1, Math.floor((position+5)/3.5))); }}><Icon name="chevR" size={16} className="" /></button>
+            <button className="btn is-ghost is-icon" onClick={() => { setPosition(Math.min(total, position + 5)); setLineIdx(Math.min(script.length-1, Math.floor((position+5)/3.5))); }}><Icon name="chevR" size={16} className="" /></button>
           </div>
 
           <div style={{padding: "14px 16px", background: "var(--paper-2)", borderRadius: 12}}>
             <div className="row" style={{alignItems: "flex-start", gap: 12}}>
-              <div style={{width: 32, height: 32, borderRadius: 50, background: active.script[lineIdx].speaker === "Alex" ? "var(--accent)" : "var(--ink)", color: "white", display: "grid", placeItems: "center", fontFamily: "var(--f-display)", fontStyle: "italic", flexShrink: 0}}>{active.script[lineIdx].speaker[0]}</div>
+              <div style={{width: 32, height: 32, borderRadius: 50, background: safeLine.speaker === "Alex" ? "var(--accent)" : "var(--ink)", color: "white", display: "grid", placeItems: "center", fontFamily: "var(--f-display)", fontStyle: "italic", flexShrink: 0}}>{safeLine.speaker[0]}</div>
               <div>
-                <div className="t-eyebrow" style={{marginBottom: 4}}>{active.script[lineIdx].speaker}</div>
-                <div style={{fontSize: 14, lineHeight: 1.55}}>{active.script[lineIdx].dialogue}</div>
+                <div className="t-eyebrow" style={{marginBottom: 4}}>{safeLine.speaker}</div>
+                <div style={{fontSize: 14, lineHeight: 1.55}}>{generating ? 'Generating recap…' : safeLine.dialogue}</div>
               </div>
             </div>
           </div>
@@ -90,13 +144,13 @@ function ScreenAudioRecap({ state }) {
           </div>
           <div>
             {state.audioRecaps.map((r, i) => (
-              <button key={r.id} className="lift" style={{display: "block", width: "100%", textAlign: "left", padding: "12px 18px", borderBottom: i === state.audioRecaps.length - 1 ? 0 : "1px solid var(--hairline)", background: r.id === active.id ? "var(--paper-2)" : "transparent", border: 0, cursor: "default"}} onClick={() => { setActive(r); setPlaying(false); setLineIdx(0); setPosition(0); }}>
+              <button key={r.id} className="lift" style={{display: "block", width: "100%", textAlign: "left", padding: "12px 18px", borderBottom: i === state.audioRecaps.length - 1 ? 0 : "1px solid var(--hairline)", background: r.id === active?.id ? "var(--paper-2)" : "transparent", border: 0, cursor: "default"}} onClick={() => { setActive(r); setPlaying(false); setLineIdx(0); setPosition(0); }}>
                 <div style={{fontWeight: 500, fontSize: 13.5}}>{r.title}</div>
                 <div className="muted" style={{fontSize: 12, marginTop: 2}}>{r.date}</div>
               </button>
             ))}
-            <button className="lift" style={{display: "flex", width: "100%", alignItems: "center", justifyContent: "center", gap: 8, padding: "14px 18px", color: "var(--ink-3)", background: "transparent", border: 0, borderTop: "1px solid var(--hairline)", cursor: "default", fontFamily: "var(--f-body)"}}>
-              <Icon name="plus" size={14} className="" /> New recap
+            <button className="lift" style={{display: "flex", width: "100%", alignItems: "center", justifyContent: "center", gap: 8, padding: "14px 18px", color: "var(--ink-3)", background: "transparent", border: 0, borderTop: "1px solid var(--hairline)", cursor: "default", fontFamily: "var(--f-body)"}} onClick={handleGenerate} disabled={generating}>
+              <Icon name="plus" size={14} className="" /> {generating ? 'Generating…' : 'New recap'}
             </button>
           </div>
         </div>
@@ -105,7 +159,7 @@ function ScreenAudioRecap({ state }) {
       <div className="card">
         <div className="t-eyebrow" style={{marginBottom: 14}}>Transcript</div>
         <div className="col" style={{gap: 14}}>
-          {active.script.map((line, i) => (
+          {script.map((line, i) => (
             <div key={i} className="row" style={{alignItems: "flex-start", gap: 12, opacity: i === lineIdx ? 1 : 0.6, transition: "opacity 0.3s var(--ease)"}}>
               <div style={{width: 24, height: 24, borderRadius: 50, background: line.speaker === "Alex" ? "var(--accent)" : "var(--ink)", color: "white", display: "grid", placeItems: "center", fontSize: 10, flexShrink: 0, fontFamily: "var(--f-display)", fontStyle: "italic"}}>{line.speaker[0]}</div>
               <div>

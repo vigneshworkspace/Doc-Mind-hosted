@@ -30,9 +30,23 @@ function SettingsGroup({ title, children }) {
   );
 }
 
+import { useEffect } from 'react';
+import { settings as settingsApi } from '../api/index.js';
+
 export default function Settings({ state, dispatch }) {
   const s = state.settings;
-  function set(k, v) { dispatch({ type: 'set-settings', patch: { [k]: v } }); }
+
+  // Mount: load settings (fallback: keep mock settings)
+  useEffect(() => {
+    settingsApi.get()
+      .then(full => dispatch({ type: 'set-settings-full', settings: full }))
+      .catch(() => { /* keep mock settings */ });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function set(k, v) {
+    dispatch({ type: 'set-settings', patch: { [k]: v } }); // optimistic
+    settingsApi.update({ [k]: v }).catch(() => { /* optimistic update stays */ });
+  }
 
   return (
     <div className="col" style={{ gap: 24, maxWidth: 720, margin: '0 auto', width: '100%' }}>

@@ -1,10 +1,12 @@
 services:
   db:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_DB: docmind
       POSTGRES_USER: docmind
       POSTGRES_PASSWORD: docmind
+    ports:
+      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -13,18 +15,78 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # One-shot: pull the embedding model, then exit.
+  ollama-init:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["sh", "-c", "ollama pull nomic-embed-text:v1.5"]
+    restart: "no"
+
   backend:
     build: ./backend
     env_file: ./backend/.env
     environment:
       DATABASE_URL: postgresql://docmind:docmind@db:5432/docmind
+      REDIS_URL: redis://redis:6379
+      OLLAMA_BASE_URL: http://ollama:11434
+      STT_DEVICE: cpu
+      STT_COMPUTE_TYPE: int8
+      CORS_ORIGINS: '["http://localhost","http://localhost:5173","http://localhost:80"]'
     ports:
       - "8000:8000"
+    volumes:
+      - model_cache:/app/.cache
+      - uploads:/app/data/uploads
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     command: >
-      sh -c "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000"
+      sh -c "python init_db.py && uvicorn main:app --host 0.0.0.0 --port 8000"
+
+  worker:
+    build: ./backend
+    env_file: ./backend/.env
+    environment:
+      DATABASE_URL: postgresql://docmind:docmind@db:5432/docmind
+      REDIS_URL: redis://redis:6379
+      OLLAMA_BASE_URL: http://ollama:11434
+    volumes:
+      - model_cache:/app/.cache
+      - uploads:/app/data/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["python", "-m", "arq", "app.workers.worker.WorkerSettings"]
 
   frontend:
     build: ./frontend
@@ -35,3 +97,7 @@ services:
 
 volumes:
   pgdata:
+  model_cache:
+  uploads:
+  ollama:
+  vibevoice_cache:

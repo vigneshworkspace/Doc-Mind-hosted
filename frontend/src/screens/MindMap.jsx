@@ -1,5 +1,6 @@
-import { useState, useRef, useMemo } from 'react';
+import { useState, useRef, useMemo, useEffect } from 'react';
 import { Icon } from '../components/Shell';
+import { mindMaps as mindMapsApi } from '../api/index.js';
 
 function layoutMindmap(root) {
   // radial layout: root at center, children fan out
@@ -30,13 +31,40 @@ function layoutMindmap(root) {
   return { nodes: positioned, W, H };
 }
 
-function ScreenMindMap({ state }) {
+function ScreenMindMap({ state, dispatch }) {
   const [active, setActive] = useState(state.mindMaps[0]);
   const [zoom, setZoom] = useState(0.8);
   const [pan, setPan] = useState({x: 0, y: 0});
+  const [generating, setGenerating] = useState(false);
   const draggingRef = useRef(null);
-  const { nodes, W, H } = useMemo(() => layoutMindmap(active.root), [active]);
+  const { nodes, W, H } = useMemo(() => active?.root ? layoutMindmap(active.root) : { nodes: [], W: 1000, H: 600 }, [active]);
   const [selected, setSelected] = useState(null);
+
+  // Mount: load mind maps (fallback: keep mock maps)
+  useEffect(() => {
+    mindMapsApi.list()
+      .then(maps => {
+        if (Array.isArray(maps) && maps.length) {
+          dispatch?.({ type: 'set-mind-maps', mindMaps: maps });
+          setActive(a => a || maps[0]);
+        }
+      })
+      .catch(() => { /* keep mock maps */ });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function handleGenerate() {
+    const docId = state.documents[0]?.id ?? null;
+    setGenerating(true);
+    try {
+      const map = await mindMapsApi.generate(docId);
+      dispatch?.({ type: 'set-mind-maps', mindMaps: [map, ...state.mindMaps] });
+      setActive(map);
+    } catch (err) {
+      console.error('Mind map generation failed:', err.message);
+    } finally {
+      setGenerating(false);
+    }
+  }
 
   function onDown(e) { draggingRef.current = { x: e.clientX, y: e.clientY, px: pan.x, py: pan.y }; }
   function onMove(e) {
@@ -51,16 +79,16 @@ function ScreenMindMap({ state }) {
       <div className="row" style={{justifyContent: "space-between", flexWrap: "wrap", gap: 10}}>
         <div>
           <div className="t-eyebrow">Mind map</div>
-          <div className="t-display" style={{fontSize: 32, marginTop: 4}}>{active.title}</div>
+          <div className="t-display" style={{fontSize: 32, marginTop: 4}}>{active?.title}</div>
         </div>
         <div className="row" style={{gap: 8}}>
-          <select className="input" style={{width: "auto"}} value={active.id} onChange={e => setActive(state.mindMaps.find(m => m.id === +e.target.value))}>
+          <select className="input" style={{width: "auto"}} value={active?.id ?? ''} onChange={e => setActive(state.mindMaps.find(m => String(m.id) === e.target.value))}>
             {state.mindMaps.map(m => <option key={m.id} value={m.id}>{m.title}</option>)}
           </select>
           <button className="btn is-ghost is-sm" onClick={() => setZoom(z => Math.max(0.3, z - 0.1))}>−</button>
           <span className="kbd" style={{minWidth: 50, textAlign: "center"}}>{Math.round(zoom * 100)}%</span>
           <button className="btn is-ghost is-sm" onClick={() => setZoom(z => Math.min(1.5, z + 0.1))}>+</button>
-          <button className="btn is-accent is-sm"><Icon name="plus" size={12} className="" /> Generate</button>
+          <button className="btn is-accent is-sm" onClick={handleGenerate} disabled={generating}><Icon name="plus" size={12} className="" /> {generating ? 'Generating…' : 'Generate'}</button>
         </div>
       </div>
       <div className="card card-flush" style={{height: 600, overflow: "hidden", background: "var(--paper-2)", backgroundImage: "radial-gradient(circle, var(--hairline-2) 1px, transparent 1px)", backgroundSize: "22px 22px", position: "relative", cursor: "default"}}

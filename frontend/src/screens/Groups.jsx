@@ -1,15 +1,38 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Icon } from '../components/Shell.jsx';
+import { groups as groupsApi } from '../api/index.js';
 
 export default function Groups({ state, dispatch }) {
   const [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState({ name: '', subject: '', description: '' });
 
-  function create() {
-    const g = { id: Date.now(), name: draft.name || 'New group', subject: draft.subject || 'General', description: draft.description, members: 1, nextSession: '' };
-    dispatch({ type: 'add-group', group: g });
+  // Mount: load groups (fallback: keep mock groups)
+  useEffect(() => {
+    groupsApi.list()
+      .then(gs => dispatch({ type: 'set-groups', studyGroups: gs }))
+      .catch(() => { /* keep mock groups */ });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function create() {
+    const groupData = { name: draft.name || 'New group', subject: draft.subject || 'General', description: draft.description };
+    try {
+      const created = await groupsApi.create(groupData);
+      dispatch({ type: 'add-group', group: created });
+    } catch {
+      dispatch({ type: 'add-group', group: { id: Date.now(), ...groupData, members: 1, nextSession: '' } });
+    }
     setCreating(false);
     setDraft({ name: '', subject: '', description: '' });
+  }
+
+  async function handleJoin(groupId) {
+    try {
+      await groupsApi.join(groupId);
+      const gs = await groupsApi.list();
+      dispatch({ type: 'set-groups', studyGroups: gs });
+    } catch (err) {
+      console.error('Join group failed:', err.message);
+    }
   }
 
   return (
@@ -74,7 +97,7 @@ export default function Groups({ state, dispatch }) {
               </div>
               <div className="row" style={{ gap: 6 }}>
                 <button className="btn is-ghost is-sm">View</button>
-                <button className="btn is-accent is-sm">Join</button>
+                <button className="btn is-accent is-sm" onClick={() => handleJoin(g.id)}>Join</button>
               </div>
             </div>
             {g.nextSession && (

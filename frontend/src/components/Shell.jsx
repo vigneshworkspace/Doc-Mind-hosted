@@ -248,8 +248,11 @@ export function PomodoroMini({ pomodoro, setPomodoro, onOpen }) {
   function reset(e) { e.stopPropagation(); setPomodoro(p => ({ ...p, running: false, seconds: (p.mode === "focus" ? p.focusMin : p.breakMin) * 60 })); }
 
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onOpen}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen?.(); } }}
       title="Open Pomodoro"
       style={{
         display: "flex", alignItems: "center", gap: 10,
@@ -278,20 +281,20 @@ export function PomodoroMini({ pomodoro, setPomodoro, onOpen }) {
         <span style={{ fontSize: 9.5, fontWeight: 500, letterSpacing: 0.1, textTransform: "uppercase", color: "var(--ink-4)" }}>{isFocus ? "focus" : "break"}</span>
       </div>
       <div className="row" style={{ gap: 2 }}>
-        <span onClick={toggle} title={pomodoro.running ? "Pause" : "Play"}
-              style={{ width: 22, height: 22, borderRadius: 6, display: "grid", placeItems: "center", cursor: "default" }}
+        <button type="button" onClick={toggle} aria-label={pomodoro.running ? "Pause" : "Play"} title={pomodoro.running ? "Pause" : "Play"}
+              style={{ width: 24, height: 24, borderRadius: 6, display: "grid", placeItems: "center", cursor: "default", background: "transparent", border: "none", padding: 0, color: "inherit" }}
               onMouseEnter={(e) => e.currentTarget.style.background = "var(--paper-2)"}
               onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}>
           <Icon name={pomodoro.running ? "pause" : "play"} size={11} className="" />
-        </span>
-        <span onClick={reset} title="Reset"
-              style={{ width: 22, height: 22, borderRadius: 6, display: "grid", placeItems: "center", cursor: "default" }}
+        </button>
+        <button type="button" onClick={reset} aria-label="Reset" title="Reset"
+              style={{ width: 24, height: 24, borderRadius: 6, display: "grid", placeItems: "center", cursor: "default", background: "transparent", border: "none", padding: 0, color: "inherit" }}
               onMouseEnter={(e) => e.currentTarget.style.background = "var(--paper-2)"}
               onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}>
           <Icon name="chevL" size={11} className="" />
-        </span>
+        </button>
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -325,7 +328,7 @@ export function CommandPalette({ open, setOpen, setTab, documents = [] }) {
       <div onClick={e => e.stopPropagation()} style={{ width: "min(560px, calc(100vw - 32px))", background: "var(--card)", border: "1px solid var(--hairline)", borderRadius: 14, boxShadow: "0 30px 80px rgba(0,0,0,.18)", overflow: "hidden" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px", borderBottom: "1px solid var(--hairline)" }}>
           <Icon name="search" size={16} className="" />
-          <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)} placeholder="Jump to anything…" style={{ border: 0, outline: 0, background: "transparent", flex: 1, font: "inherit", fontSize: 14, color: "var(--ink)" }} />
+          <input ref={inputRef} aria-label="Jump to anything" value={q} onChange={e => setQ(e.target.value)} placeholder="Jump to anything…" style={{ border: 0, outline: 0, background: "transparent", flex: 1, font: "inherit", fontSize: 14, color: "var(--ink)" }} />
           <span className="kbd">esc</span>
         </div>
         <div style={{ maxHeight: "50vh", overflowY: "auto", padding: 6 }}>

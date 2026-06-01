@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { Icon } from '../components/Shell';
 import foxHeadImg from '../assets/fox-head.png';
+import { streamSSE } from '../api/stream.js';
+import LoaderHelix from '../components/LoaderHelix.jsx';
 
 // ── Elevated message component ────────────────────────────────
 function ElevatedMessage({ msg, isHovered, isCopied, onHover, onCopy }) {
@@ -146,14 +148,11 @@ function ThinkingRow() {
         }}>DocMind</span>
       </div>
       <div style={{
-        paddingLeft: 33,
-        display: "flex", gap: 5, alignItems: "center",
+        display: "flex", flexDirection: "column", gap: 4, alignItems: "center",
       }}>
-        <ChatDot delay="0s" />
-        <ChatDot delay="0.15s" />
-        <ChatDot delay="0.3s" />
+        <LoaderHelix dots={6} speed={1.6} variant="dna" />
         <span style={{
-          fontSize: 12, color: "var(--ink-4)", marginLeft: 5,
+          fontSize: 12, color: "var(--ink-4)",
           fontStyle: "italic", letterSpacing: 0.01,
         }}>thinking…</span>
       </div>
@@ -278,24 +277,51 @@ function ScreenAIChat({ state, dispatch }) {
     setInput("");
     setThinking(true);
 
-    let reply;
-    try {
-      const doc = state.documents.find(d => String(d.id) === String(ctxDoc));
-      const sys = doc
-        ? `You are DocMind, an AI study assistant. The user has loaded "${doc.name}". Be concise, pedagogically precise, under 3 paragraphs.`
-        : `You are DocMind, an AI study assistant. Be concise, pedagogically precise, under 3 paragraphs.`;
-      reply = await window.claude.complete({
-        messages: [{ role: "user", content: `${sys}\n\n${t}` }],
-      });
-    } catch (e) {
-      await new Promise(r => setTimeout(r, 800 + Math.random() * 500));
-      reply = synthesizeFallback(t, ctxDoc, state.documents);
-    }
+    const aiMsgId = now + 1;
+    const body = { messages: [{ role: "user", content: t }] };
+    if (ctxDoc) body.document_id = ctxDoc;
 
-    setMessages(m => [...m, {
-      id: Date.now() + 1, sender: "ai", text: reply, ts: Date.now(),
-    }]);
-    setThinking(false);
+    // Keep the "thinking" indicator until the FIRST token arrives, then flip
+    // to a streaming AI bubble (CORRECTIONS P6 issue 6).
+    let firstChunk = true;
+    let streamed = false;
+    try {
+      for await (const token of streamSSE('/chat/stream', body)) {
+        if (firstChunk) {
+          setMessages(m => [...m, { id: aiMsgId, sender: "ai", text: token, ts: Date.now() }]);
+          setThinking(false);
+          firstChunk = false;
+          streamed = true;
+        } else {
+          // The streaming bubble is always the last message — append in place
+          // instead of mapping the whole array on every token (O(1) vs O(n)).
+          setMessages(m => {
+            const last = m[m.length - 1];
+            if (!last || last.id !== aiMsgId) return m;
+            const next = m.slice();
+            next[next.length - 1] = { ...last, text: last.text + token };
+            return next;
+          });
+        }
+      }
+    } catch (e) {
+      // Backend unavailable — fall back to local synthesizer
+      const fallback = synthesizeFallback(t, ctxDoc, state.documents);
+      setThinking(false);
+      if (firstChunk) {
+        setMessages(m => [...m, { id: aiMsgId, sender: "ai", text: fallback, ts: Date.now() }]);
+        firstChunk = false;
+      } else {
+        setMessages(m => m.map(msg => msg.id === aiMsgId && !msg.text ? { ...msg, text: fallback } : msg));
+      }
+    }
+    if (firstChunk) {
+      // Backend returned 200 but no tokens — show fallback
+      setThinking(false);
+      const fallback = synthesizeFallback(t, ctxDoc, state.documents);
+      setMessages(m => [...m, { id: aiMsgId, sender: "ai", text: fallback, ts: Date.now() }]);
+    }
+    void streamed;
   }
 
   const activeDoc = state.documents.find(d => String(d.id) === String(ctxDoc));
@@ -342,14 +368,15 @@ function ScreenAIChat({ state, dispatch }) {
             fontFamily: "'JetBrains Mono', ui-monospace, monospace",
             marginBottom: 4,
           }}>Conversation</div>
-          <div style={{
+          <h1 style={{
+            margin: 0,
             fontFamily: "var(--f-display)",
             fontSize: 30, fontWeight: 600,
             letterSpacing: -0.022, lineHeight: 1,
             color: "var(--ink)",
           }}>
             Ask <em style={{ fontStyle: "italic", fontWeight: 400, color: "var(--ink-2)" }}>anything.</em>
-          </div>
+          </h1>
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
@@ -558,6 +585,7 @@ function ScreenAIChat({ state, dispatch }) {
           }}>
             <textarea
               ref={textRef}
+              aria-label="Message DocMind"
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={e => {

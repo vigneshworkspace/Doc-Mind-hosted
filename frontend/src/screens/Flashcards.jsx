@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Icon } from '../components/Shell';
+import { flashcards as flashcardsApi } from '../api/index.js';
 
 function FlipFace({ face, content, hint }) {
   return (
@@ -15,6 +16,33 @@ function ScreenFlashcards({ state, dispatch }) {
   const [active, setActive] = useState(null); // a flashcard set being studied
   const [flipped, setFlipped] = useState(false);
   const [idx, setIdx] = useState(0);
+  const [generating, setGenerating] = useState(false);
+
+  // Mount: load flashcard sets (fallback: keep mock sets)
+  useEffect(() => {
+    flashcardsApi.list()
+      .then(sets => dispatch({ type: 'set-flashcard-sets', flashcardSets: sets }))
+      .catch(() => { /* keep mock sets */ });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function handleGenerate() {
+    const docId = state.documents[0]?.id ?? null;
+    setGenerating(true);
+    try {
+      const newSet = await flashcardsApi.generate(docId);
+      dispatch({ type: 'add-flashcard-set', set: newSet });
+    } catch {
+      // Fallback: create a local placeholder set so the UX still responds
+      const local = { id: Date.now(), title: "New set", date: new Date().toISOString().slice(0, 10), cards: [
+        { id: 1, question: "What is the chain rule?", answer: "A formula to compute the derivative of a composite function — multiply the derivatives of each link." },
+        { id: 2, question: "Define mitochondria.", answer: "The cell's power plants — they convert food into ATP." },
+        { id: 3, question: "Newton's first law?", answer: "An object in motion stays in motion unless acted on by an external force." },
+      ] };
+      dispatch({ type: 'add-flashcard-set', set: local });
+    } finally {
+      setGenerating(false);
+    }
+  }
 
   function startSet(set) { setActive(set); setIdx(0); setFlipped(false); }
 
@@ -36,16 +64,10 @@ function ScreenFlashcards({ state, dispatch }) {
           </div>
         ))}
         <button className="card lift" style={{borderStyle: "dashed", color: "var(--ink-3)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, minHeight: 220, cursor: "default"}}
-          onClick={() => {
-            const newSet = { id: Date.now(), title: "New set", date: new Date().toISOString().slice(0,10), cards: [
-              {id: 1, question: "What is the chain rule?", answer: "A formula to compute the derivative of a composite function — multiply the derivatives of each link."},
-              {id: 2, question: "Define mitochondria.", answer: "The cell's power plants — they convert food into ATP."},
-              {id: 3, question: "Newton's first law?", answer: "An object in motion stays in motion unless acted on by an external force."},
-            ]};
-            dispatch({ type: "add-flashcard-set", set: newSet });
-          }}>
+          disabled={generating}
+          onClick={handleGenerate}>
           <Icon name="plus" size={20} className="" />
-          <div style={{fontFamily: "var(--f-display)", fontSize: 18}}>Generate a set</div>
+          <div style={{fontFamily: "var(--f-display)", fontSize: 18}}>{generating ? 'Generating…' : 'Generate a set'}</div>
           <div className="muted" style={{fontSize: 12}}>From any document or topic</div>
         </button>
       </div>

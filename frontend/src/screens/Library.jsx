@@ -1,11 +1,77 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Icon } from '../components/Shell';
 import { DocIcon } from './Dashboard';
+import { documents as docsApi } from '../api/index.js';
 
 function ScreenDocuments({ state, dispatch, setTab }) {
   const [filter, setFilter] = useState("all");
   const [q, setQ] = useState("");
   const [view, setView] = useState("grid");
+  const [uploadError, setUploadError] = useState('');
+  const [pollIds, setPollIds] = useState([]); // doc ids being polled for processing
+
+  // Mount: load real document list (fallback: mock data already in state)
+  useEffect(() => {
+    docsApi.list()
+      .then(docs => dispatch({ type: 'set-documents', documents: docs }))
+      .catch(() => { /* keep mock data as fallback */ });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Poll processing status for newly uploaded docs
+  useEffect(() => {
+    if (pollIds.length === 0) return;
+    const id = setInterval(async () => {
+      const remaining = [];
+      for (const docId of pollIds) {
+        try {
+          const res = await docsApi.status(docId); // GET /documents/:id/status → { status }
+          if (res.status !== 'ready') {
+            remaining.push(docId);
+          } else {
+            // Refresh full list once doc is ready
+            docsApi.list().then(docs => dispatch({ type: 'set-documents', documents: docs })).catch(() => {});
+          }
+        } catch {
+          remaining.push(docId); // keep polling on transient error
+        }
+      }
+      setPollIds(remaining);
+    }, 3000);
+    return () => clearInterval(id);
+  }, [pollIds]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function handleUpload(file) {
+    if (!file) return;
+    setUploadError('');
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+      const newDoc = await docsApi.upload(formData);
+      dispatch({ type: 'set-documents', documents: [newDoc, ...state.documents] });
+      if (newDoc.processing_status !== 'ready' && newDoc.status !== 'ready') {
+        setPollIds(ids => [...ids, newDoc.id]);
+      }
+    } catch (err) {
+      setUploadError(err.message || 'Upload failed.');
+    }
+  }
+
+  function openFilePicker() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.pdf,.docx,.txt';
+    input.onchange = e => handleUpload(e.target.files[0]);
+    input.click();
+  }
+
+  async function handleDelete(docId) {
+    try {
+      await docsApi.delete(docId);
+      dispatch({ type: 'set-documents', documents: state.documents.filter(d => d.id !== docId) });
+    } catch (err) {
+      console.error('Delete failed:', err.message);
+    }
+  }
   const tags = ["all", ...new Set(state.documents.flatMap(d => d.tags))];
   const docs = state.documents.filter(d => {
     if (filter !== "all" && !d.tags.includes(filter)) return false;
@@ -13,16 +79,8 @@ function ScreenDocuments({ state, dispatch, setTab }) {
     return true;
   });
 
-  function addSample() {
-    dispatch({ type: "add-doc", doc: {
-      id: Date.now(),
-      name: ["Organic Chemistry Notes.pdf", "World History — WWII.pdf", "Linear Algebra Ch.3.pdf", "Macroeconomics.docx"][Math.floor(Math.random()*4)],
-      size: `${(Math.random() * 4 + 0.5).toFixed(1)} MB`,
-      type: ["pdf", "pdf", "docx"][Math.floor(Math.random()*3)],
-      uploadDate: new Date().toISOString().slice(0, 10),
-      tags: [["Chemistry","Notes"], ["History"], ["Math"], ["Economics", "Notes"]][Math.floor(Math.random()*4)],
-    }});
-  }
+  // Upload entry point — opens the native file picker (real multipart POST).
+  const addSample = openFilePicker;
 
   return (
     <div className="col" style={{gap: 24}}>
@@ -46,7 +104,7 @@ function ScreenDocuments({ state, dispatch, setTab }) {
       <div className="row" style={{gap: 10, flexWrap: "wrap"}}>
         <div className="topbar-search" style={{width: 280, height: 36, background: "var(--card)"}}>
           <Icon name="search" size={14} className="" />
-          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search documents…" style={{border: 0, outline: 0, background: "transparent", flex: 1, font: "inherit", fontSize: 13, color: "var(--ink)"}} />
+          <input aria-label="Search documents" value={q} onChange={e => setQ(e.target.value)} placeholder="Search documents…" style={{border: 0, outline: 0, background: "transparent", flex: 1, font: "inherit", fontSize: 13, color: "var(--ink)"}} />
         </div>
         <div className="row" style={{gap: 6, padding: 3, background: "var(--paper-2)", border: "1px solid var(--hairline)", borderRadius: 9}}>
           {tags.map(t => (
@@ -60,8 +118,12 @@ function ScreenDocuments({ state, dispatch, setTab }) {
           <button onClick={() => setView("grid")} className={`btn is-sm ${view === "grid" ? "" : "is-quiet"}`} style={{height: 28, padding: "0 10px"}}>Grid</button>
           <button onClick={() => setView("list")} className={`btn is-sm ${view === "list" ? "" : "is-quiet"}`} style={{height: 28, padding: "0 10px"}}>List</button>
         </div>
-        <button className="btn is-accent" onClick={addSample}><Icon name="upload" size={14} className="" /> Upload</button>
+        <button className="btn is-accent" onClick={openFilePicker}><Icon name="upload" size={14} className="" /> Upload</button>
       </div>
+
+      {uploadError && (
+        <div style={{ color: 'var(--err, #dc2626)', fontSize: 13, marginTop: -12 }}>{uploadError}</div>
+      )}
 
       {view === "grid" ? (
         <div className="grid grid-3">
@@ -80,6 +142,7 @@ function ScreenDocuments({ state, dispatch, setTab }) {
                 <button className="btn is-ghost is-sm" onClick={(e) => { e.stopPropagation(); setTab("pdf-qa"); }}>Ask</button>
                 <button className="btn is-ghost is-sm" onClick={(e) => { e.stopPropagation(); setTab("quiz-generator"); }}>Quiz</button>
                 <button className="btn is-ghost is-sm" onClick={(e) => { e.stopPropagation(); setTab("flashcards"); }}>Cards</button>
+                <button className="btn is-ghost is-sm" style={{ marginLeft: 'auto', color: 'var(--danger)' }} onClick={(e) => { e.stopPropagation(); handleDelete(d.id); }}>Delete</button>
               </div>
             </div>
           ))}

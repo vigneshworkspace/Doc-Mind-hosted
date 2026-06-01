@@ -5,6 +5,7 @@ from app.core.deps import get_db, get_current_user
 from app.models.orm import User, MindMap, Document
 from app.schemas.schemas import MindMapGenerateRequest, MindMapOut
 from app.services import generators
+from app.services.generators import get_doc_context
 
 router = APIRouter()
 
@@ -41,7 +42,7 @@ async def generate_mindmap(
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    root = await generators.generate_mindmap(doc.content or "")
+    root = await generators.generate_mindmap(get_doc_context(doc))
 
     mm = MindMap(
         user_id=current_user.id,

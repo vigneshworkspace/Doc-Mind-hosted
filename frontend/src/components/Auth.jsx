@@ -1,93 +1,167 @@
 import { useState } from 'react';
 import { Icon } from './Shell';
+import { auth as authApi } from '../api/index.js';
+import { setToken } from '../api/client.js';
 
-function AuthScreen({ onAuth, accent }) {
-  const [mode, setMode] = useState("login");
-  const [form, setForm] = useState({ name: "", email: "sam@school.edu", password: "••••••••" });
+function AuthScreen({ onAuth }) {
+  const [mode, setMode] = useState('login');
+  const [form, setForm] = useState({ name: '', email: '', password: '' });
   const [shake, setShake] = useState(false);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  function submit(e) {
+  async function submit(e) {
     e.preventDefault();
+    setError('');
+
     if (!form.email || !form.password) {
       setShake(true);
       setTimeout(() => setShake(false), 400);
       return;
     }
-    onAuth({ name: form.name || form.email.split("@")[0], email: form.email });
+
+    setLoading(true);
+    try {
+      let data;
+      if (mode === 'login') {
+        data = await authApi.login(form.email, form.password);
+      } else {
+        if (!form.name) {
+          setError('Name is required for signup.');
+          setLoading(false);
+          return;
+        }
+        data = await authApi.signup(form.name, form.email, form.password);
+      }
+
+      // Store JWT and hand off to App
+      setToken(data.access_token);
+      onAuth({ name: data.name || form.name || form.email.split('@')[0], email: form.email });
+    } catch (err) {
+      setError(err.message || 'Something went wrong. Please try again.');
+      setShake(true);
+      setTimeout(() => setShake(false), 400);
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
     <div className="auth-shell">
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 60, maxWidth: 980, width: "100%", alignItems: "center" }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 28, paddingRight: 20 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 60, maxWidth: 980, width: '100%', alignItems: 'center' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 28, paddingRight: 20 }}>
           <div className="row" style={{ gap: 12 }}>
             <div className="side-logo" style={{ width: 36, height: 36, fontSize: 22 }}>D</div>
-            <div className="t-display" style={{ fontSize: 28 }}>Doc<em style={{ color: "var(--accent)", fontStyle: "italic" }}>Mind</em></div>
+            <div className="t-display" style={{ fontSize: 28 }}>Doc<em style={{ color: 'var(--accent)', fontStyle: 'italic' }}>Mind</em></div>
           </div>
-          <h1 className="t-display" style={{ fontSize: 64, lineHeight: 1, letterSpacing: "-0.025em" }}>
+          <h1 className="t-display" style={{ fontSize: 64, lineHeight: 1, letterSpacing: '-0.025em' }}>
             Read less.<br /><em className="t-italic">Understand more.</em>
           </h1>
-          <p style={{ color: "var(--ink-3)", fontSize: 16, lineHeight: 1.55, maxWidth: 420 }}>
+          <p style={{ color: 'var(--ink-3)', fontSize: 16, lineHeight: 1.55, maxWidth: 420 }}>
             A calm, considered study companion. Drop in a document and turn it into questions, cards, maps, and audio — without the noise.
           </p>
           <div className="col" style={{ gap: 12, marginTop: 6 }}>
             {[
-              "Talk to any document — with citations.",
-              "Generate quizzes, mind maps, and audio recaps in seconds.",
-              "Track streaks. Build the habit. Quietly.",
+              'Talk to any document — with citations.',
+              'Generate quizzes, mind maps, and audio recaps in seconds.',
+              'Track streaks. Build the habit. Quietly.',
             ].map(t => (
               <div key={t} className="row" style={{ gap: 10 }}>
-                <div style={{ width: 18, height: 18, borderRadius: 50, background: "var(--accent-soft)", color: "var(--accent-ink)", display: "grid", placeItems: "center", flexShrink: 0 }}>
+                <div style={{ width: 18, height: 18, borderRadius: 50, background: 'var(--accent-soft)', color: 'var(--accent-ink)', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
                   <Icon name="check" size={11} className="" />
                 </div>
-                <span style={{ fontSize: 14, color: "var(--ink-2)" }}>{t}</span>
+                <span style={{ fontSize: 14, color: 'var(--ink-2)' }}>{t}</span>
               </div>
             ))}
           </div>
         </div>
-        <form onSubmit={submit} className="auth-card" style={{ animation: shake ? "shake 0.4s" : "none" }}>
-          <div className="t-eyebrow" style={{ marginBottom: 8 }}>{mode === "login" ? "Welcome back" : "Welcome aboard"}</div>
+
+        <form onSubmit={submit} className="auth-card" style={{ animation: shake ? 'shake 0.4s' : 'none' }}>
+          <div className="t-eyebrow" style={{ marginBottom: 8 }}>{mode === 'login' ? 'Welcome back' : 'Welcome aboard'}</div>
           <h2 className="t-display" style={{ fontSize: 32, marginBottom: 24 }}>
-            {mode === "login" ? <>Sign <em className="t-italic">in</em>.</> : <>Create your <em className="t-italic">account</em>.</>}
+            {mode === 'login' ? <>Sign <em className="t-italic">in</em>.</> : <>Create your <em className="t-italic">account</em>.</>}
           </h2>
+
+          {/* Error banner */}
+          {error && (
+            <div style={{
+              padding: '10px 14px',
+              marginBottom: 16,
+              background: 'color-mix(in oklch, var(--err, #dc2626) 10%, var(--card))',
+              border: '1px solid color-mix(in oklch, var(--err, #dc2626) 30%, var(--hairline))',
+              borderRadius: 8,
+              fontSize: 13,
+              color: 'var(--err, #dc2626)',
+              lineHeight: 1.4,
+            }}>
+              {error}
+            </div>
+          )}
+
           <div className="col" style={{ gap: 14 }}>
-            {mode === "signup" && (
+            {mode === 'signup' && (
               <div>
                 <label className="field-label">Name</label>
-                <input className="input" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Sam Reyes" autoComplete="name" />
+                <input
+                  className="input"
+                  value={form.name}
+                  onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+                  placeholder="Sam Reyes"
+                  autoComplete="name"
+                  disabled={loading}
+                />
               </div>
             )}
             <div>
               <label className="field-label">Email</label>
-              <input className="input" type="email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} autoComplete="email" />
+              <input
+                className="input"
+                type="email"
+                value={form.email}
+                onChange={e => setForm(f => ({ ...f, email: e.target.value }))}
+                autoComplete="email"
+                disabled={loading}
+              />
             </div>
             <div>
               <label className="field-label">Password</label>
-              <input className="input" type="password" value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} autoComplete="current-password" />
+              <input
+                className="input"
+                type="password"
+                value={form.password}
+                onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
+                autoComplete="current-password"
+                disabled={loading}
+              />
             </div>
-            {mode === "login" && (
-              <div className="row" style={{ justifyContent: "space-between", fontSize: 13 }}>
-                <label className="row" style={{ gap: 6, color: "var(--ink-2)" }}><input type="checkbox" defaultChecked /> Remember me</label>
-                <a style={{ color: "var(--accent)", textDecoration: "none" }} href="#">Forgot?</a>
+            {mode === 'login' && (
+              <div className="row" style={{ justifyContent: 'space-between', fontSize: 13 }}>
+                <label className="row" style={{ gap: 6, color: 'var(--ink-2)' }}><input type="checkbox" defaultChecked /> Remember me</label>
+                <a style={{ color: 'var(--accent)', textDecoration: 'none' }} href="#">Forgot?</a>
               </div>
             )}
-            <button className="btn is-accent is-lg is-block" type="submit">
-              {mode === "login" ? "Sign in" : "Create account"} <Icon name="chevR" size={14} className="" />
+            <button className="btn is-accent is-lg is-block" type="submit" disabled={loading}>
+              {loading
+                ? 'Please wait…'
+                : mode === 'login'
+                  ? 'Sign in'
+                  : 'Create account'}{' '}
+              {!loading && <Icon name="chevR" size={14} className="" />}
             </button>
-            <div className="row" style={{ gap: 10, alignItems: "center", margin: "6px 0" }}>
-              <div className="div-v" style={{ flex: 1, height: 1, width: "auto" }}></div>
-              <span className="muted" style={{ fontSize: 11, letterSpacing: 0.1, textTransform: "uppercase" }}>or</span>
-              <div className="div-v" style={{ flex: 1, height: 1, width: "auto" }}></div>
+            <div className="row" style={{ gap: 10, alignItems: 'center', margin: '6px 0' }}>
+              <div className="div-v" style={{ flex: 1, height: 1, width: 'auto' }}></div>
+              <span className="muted" style={{ fontSize: 11, letterSpacing: 0.1, textTransform: 'uppercase' }}>or</span>
+              <div className="div-v" style={{ flex: 1, height: 1, width: 'auto' }}></div>
             </div>
-            <button type="button" className="btn is-ghost is-block">Continue with Google</button>
-            <div style={{ textAlign: "center", fontSize: 13, marginTop: 4, color: "var(--ink-3)" }}>
-              {mode === "login" ? "New here?" : "Already have an account?"}{" "}
+            <button type="button" className="btn is-ghost is-block" disabled={loading}>Continue with Google</button>
+            <div style={{ textAlign: 'center', fontSize: 13, marginTop: 4, color: 'var(--ink-3)' }}>
+              {mode === 'login' ? 'New here?' : 'Already have an account?'}{' '}
               <a
-                style={{ color: "var(--accent)", textDecoration: "none" }}
+                style={{ color: 'var(--accent)', textDecoration: 'none' }}
                 href="#"
-                onClick={(e) => { e.preventDefault(); setMode(mode === "login" ? "signup" : "login"); }}
+                onClick={(e) => { e.preventDefault(); setMode(mode === 'login' ? 'signup' : 'login'); setError(''); }}
               >
-                {mode === "login" ? "Create an account" : "Sign in"}
+                {mode === 'login' ? 'Create an account' : 'Sign in'}
               </a>
             </div>
           </div>

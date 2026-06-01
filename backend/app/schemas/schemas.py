@@ -40,6 +40,18 @@ class DocumentOut(BaseModel):
     type: Optional[str] = None
     upload_date: Optional[_Date] = None
     tags: List[str] = []
+    processing_status: str = "queued"
+
+
+class DocumentDetailOut(DocumentOut):
+    """Single-document response — includes the parsed text the worker extracted
+    (parsed_md/content), the page count, summary, and outline."""
+
+    content: Optional[str] = None
+    parsed_md: Optional[str] = None
+    summary: Optional[str] = None
+    page_count: Optional[int] = None
+    outline: List[Any] = []
 
 
 # ── Quizzes ──────────────────────────────────────────────────
@@ -159,6 +171,7 @@ class AudioRecapOut(BaseModel):
     source_document_id: Optional[int] = None
     summary: Optional[str] = None
     script: List[ScriptLine] = []
+    processing_status: str = "queued"
 
 
 # ── Quick Revise ─────────────────────────────────────────────

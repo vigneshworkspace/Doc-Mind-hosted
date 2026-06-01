@@ -5,6 +5,7 @@ from app.core.deps import get_db, get_current_user
 from app.models.orm import User, FlashcardSet, Document
 from app.schemas.schemas import FlashcardSetGenerateRequest, FlashcardSetOut
 from app.services import generators
+from app.services.generators import get_doc_context
 
 router = APIRouter()
 
@@ -43,7 +44,7 @@ async def generate_flashcard_set(
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    cards = await generators.generate_flashcards(doc.content or "")
+    cards = await generators.generate_flashcards(get_doc_context(doc))
 
     fs = FlashcardSet(
         user_id=current_user.id,

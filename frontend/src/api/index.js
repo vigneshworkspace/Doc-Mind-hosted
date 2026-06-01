@@ -1,4 +1,4 @@
-import { api } from './client.js';
+import { api, getToken } from './client.js';
 
 // Auth
 export const auth = {
@@ -12,8 +12,25 @@ export const auth = {
 export const documents = {
   list: () => api.get('/documents'),
   get: (id) => api.get(`/documents/${id}`),
-  upload: (formData) =>
-    fetch('/api/v1/documents', { method: 'POST', body: formData, credentials: 'include' }).then(r => r.json()),
+  // Lightweight status poll — GET /documents/:id/status returns { id, status }
+  status: (id) => api.get(`/documents/${id}/status`),
+  upload: (formData) => {
+    const token = getToken();
+    const headers = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    return fetch('/api/v1/documents', {
+      method: 'POST',
+      headers,
+      body: formData,
+      credentials: 'include',
+    }).then(async r => {
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({ detail: r.statusText }));
+        throw new Error(err.detail || `HTTP ${r.status}`);
+      }
+      return r.json();
+    });
+  },
   delete: (id) => api.delete(`/documents/${id}`),
 };
 
@@ -46,6 +63,7 @@ export const mindMaps = {
 // Audio Recaps
 export const audioRecaps = {
   list: () => api.get('/audio-recaps'),
+  get: (id) => api.get(`/audio-recaps/${id}`),
   generate: (docId) => api.post('/audio-recaps/generate', { document_id: docId }),
 };
 
@@ -80,4 +98,34 @@ export const settings = {
 // History
 export const history = {
   list: () => api.get('/history'),
+};
+
+// YouTube
+export const youtube = {
+  analyze: (videoUrl) => api.post('/youtube/transcript', { video_url: videoUrl }),
+  summarize: (videoUrl) => api.post('/youtube/summarize', { video_url: videoUrl }),
+};
+
+// Visual AI — multipart image upload (mirrors documents.upload style)
+export const visualAI = {
+  solve: (file, prompt = '') => {
+    const token = getToken();
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('prompt', prompt);
+    const headers = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    return fetch('/api/v1/visual-ai/solve', { method: 'POST', headers, body: fd, credentials: 'include' })
+      .then(async r => { if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `HTTP ${r.status}`); return r.json(); });
+  },
+};
+
+// Diagrams
+export const diagrams = {
+  generate: (prompt, style = 'flowchart') => api.post('/diagrams/generate', { prompt, style }),
+};
+
+// Concepts
+export const concepts = {
+  visualize: (concept) => api.post('/concepts/visualize', { concept }),
 };

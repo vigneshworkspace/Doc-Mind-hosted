@@ -1,24 +1,74 @@
 import { useState, useEffect, useRef } from 'react';
 import { Icon } from '../components/Shell';
 import { DocIcon } from './Dashboard';
+import { streamSSE } from '../api/stream.js';
+import { documents as docsApi } from '../api/index.js';
+import LoaderHelix from '../components/LoaderHelix.jsx';
 
 function ScreenPdfQA({ state, dispatch }) {
   const [doc, setDoc] = useState(state.documents[0]);
+  const [detail, setDetail] = useState(null);   // full doc incl. parsed text + page_count
+  const [loadingDoc, setLoadingDoc] = useState(false);
   const [messages, setMessages] = useState([
-    { sender: "ai", text: "Loaded — ask me anything from this document and I'll cite where I'm looking." }
+    { id: 0, sender: "ai", text: "Loaded — ask me anything from this document and I'll cite where I'm looking." }
   ]);
   const [input, setInput] = useState("");
+  const [thinking, setThinking] = useState(false);
   const endRef = useRef(null);
   useEffect(() => endRef.current?.scrollIntoView?.({block: "end"}), [messages]);
 
-  function send() {
-    if (!input.trim()) return;
-    const u = { sender: "user", text: input };
-    setMessages(m => [...m, u]);
+  // Pull the real parsed content for the selected document. The list endpoint
+  // only returns metadata; GET /documents/:id carries parsed_md/content/page_count.
+  useEffect(() => {
+    if (!doc?.id) { setDetail(null); return; }
+    let cancelled = false;
+    setLoadingDoc(true);
+    docsApi.get(doc.id)
+      .then(d => { if (!cancelled) setDetail(d); })
+      .catch(() => { if (!cancelled) setDetail(null); })  // fall back to mock content below
+      .finally(() => { if (!cancelled) setLoadingDoc(false); });
+    return () => { cancelled = true; };
+  }, [doc?.id]);
+
+  // Real extracted text, with mock-data fallback for the seeded demo documents.
+  const docText = (detail?.parsed_md || detail?.content || doc?.content || "").trim();
+  const pageCount = detail?.page_count ?? null;
+  const status = detail?.processing_status || doc?.processing_status;
+  const stillProcessing = status && status !== "ready" && !docText;
+
+  async function send() {
+    const t = input.trim();
+    if (!t || thinking) return;
+    const now = Date.now();
+    setMessages(m => [...m, { id: now, sender: "user", text: t }]);
     setInput("");
-    setTimeout(() => {
-      setMessages(m => [...m, { sender: "ai", text: `According to ${doc.name}, ${input.toLowerCase().includes("summar") ? "the document outlines three central concepts: quantization, wave-particle duality, and the uncertainty principle. Each is illustrated through a canonical experiment." : "the passage you're asking about is best summarized on page 4. The argument hinges on the distinction between continuous and discrete quantities — which is precisely the foundation for the chapter's later claims about measurement."}`, cites: ["p.3", "p.4–5"] }]);
-    }, 700);
+    setThinking(true);
+
+    const aiMsgId = now + 1;
+    const body = { messages: [{ role: "user", content: t }] };
+    if (doc?.id) body.document_id = doc.id;
+
+    let firstChunk = true;
+    try {
+      for await (const token of streamSSE('/chat/stream', body)) {
+        if (firstChunk) {
+          setMessages(m => [...m, { id: aiMsgId, sender: "ai", text: token }]);
+          setThinking(false);
+          firstChunk = false;
+        } else {
+          setMessages(m => m.map(msg => msg.id === aiMsgId ? { ...msg, text: msg.text + token } : msg));
+        }
+      }
+    } catch {
+      setThinking(false);
+      if (firstChunk) {
+        setMessages(m => [...m, { id: aiMsgId, sender: "ai", text: 'Could not reach the server. Check your connection.' }]);
+      }
+    }
+    if (firstChunk) {
+      setThinking(false);
+      setMessages(m => [...m, { id: aiMsgId, sender: "ai", text: 'No response from the server.' }]);
+    }
   }
 
   return (
@@ -28,7 +78,7 @@ function ScreenPdfQA({ state, dispatch }) {
           <DocIcon ext={doc?.type} />
           <div style={{flex: 1, minWidth: 0}}>
             <div style={{fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"}}>{doc?.name}</div>
-            <div className="muted" style={{fontSize: 11.5}}>{doc?.size} · 12 pages</div>
+            <div className="muted" style={{fontSize: 11.5}}>{doc?.size}{pageCount ? ` · ${pageCount} page${pageCount === 1 ? "" : "s"}` : ""}</div>
           </div>
           <select className="input" style={{width: "auto", height: 30, fontSize: 12, paddingRight: 28}} value={doc?.id || ""} onChange={e => setDoc(state.documents.find(d => d.id === +e.target.value))}>
             {state.documents.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
@@ -36,11 +86,20 @@ function ScreenPdfQA({ state, dispatch }) {
         </div>
         <div className="scroll-area" style={{flex: 1, background: "var(--paper-2)", padding: 24}}>
           <div style={{background: "var(--card)", border: "1px solid var(--hairline)", borderRadius: 6, padding: "28px 32px", boxShadow: "0 1px 0 var(--paper-2)", maxWidth: 520, margin: "0 auto"}}>
-            <div className="t-mono" style={{fontSize: 10, color: "var(--ink-4)", marginBottom: 16}}>PAGE 3</div>
+            <div className="t-mono" style={{fontSize: 10, color: "var(--ink-4)", marginBottom: 16}}>EXTRACTED TEXT</div>
             <div className="t-display" style={{fontSize: 22, marginBottom: 14}}>{doc?.name?.replace(/\.[a-z]+$/i, "")}</div>
-            <p style={{fontSize: 13, lineHeight: 1.7, color: "var(--ink-2)", marginBottom: 12}}>{doc?.content?.slice(0, 280)}{doc?.content && doc.content.length > 280 ? "…" : ""}</p>
-            <p style={{fontSize: 13, lineHeight: 1.7, color: "var(--ink-2)", marginBottom: 12}}>The argument proceeds by considering what it would mean for energy to be infinitely divisible. Empirically, this turns out not to be the case: black-body radiation curves can only be explained if energy comes in indivisible packets, called <em>quanta</em>.</p>
-            <p style={{fontSize: 13, lineHeight: 1.7, color: "var(--ink-2)"}}>This insight, due to Planck and later extended by Einstein, set the stage for the formalism developed in the following chapter.</p>
+            {loadingDoc ? (
+              <div style={{display: "grid", placeItems: "center", padding: "32px 0", gap: 12}}>
+                <LoaderHelix dots={8} speed={1.8} variant="dna" />
+                <span className="muted" style={{fontSize: 12}}>Loading document…</span>
+              </div>
+            ) : stillProcessing ? (
+              <p className="muted" style={{fontSize: 13}}>Still processing this document ({status}). The parsed text will appear once extraction finishes.</p>
+            ) : docText ? (
+              <pre style={{fontSize: 13, lineHeight: 1.7, color: "var(--ink-2)", whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "var(--f-body)", margin: 0}}>{docText.slice(0, 4000)}{docText.length > 4000 ? "…" : ""}</pre>
+            ) : (
+              <p className="muted" style={{fontSize: 13}}>No text could be extracted from this document.</p>
+            )}
           </div>
         </div>
       </div>
@@ -66,6 +125,12 @@ function ScreenPdfQA({ state, dispatch }) {
                 )}
               </div>
             ))}
+            {thinking && (
+              <div style={{alignSelf: "center", display: "flex", flexDirection: "column", alignItems: "center", gap: 4}}>
+                <LoaderHelix dots={6} speed={1.6} variant="dna" />
+                <span className="muted" style={{fontSize: 12, fontStyle: "italic"}}>thinking…</span>
+              </div>
+            )}
             <div ref={endRef}></div>
           </div>
         </div>
@@ -76,7 +141,7 @@ function ScreenPdfQA({ state, dispatch }) {
             ))}
           </div>
           <div className="card-tight" style={{display: "flex", gap: 8, alignItems: "flex-end", padding: 6}}>
-            <input className="input" value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === "Enter" && send()} placeholder="Ask about this document…" style={{border: 0, background: "transparent"}} />
+            <input className="input" aria-label="Ask about this document" value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === "Enter" && send()} placeholder="Ask about this document…" style={{border: 0, background: "transparent"}} />
             <button className="btn is-accent is-icon is-sm" onClick={send}><Icon name="send" size={14} className="" /></button>
           </div>
         </div>
