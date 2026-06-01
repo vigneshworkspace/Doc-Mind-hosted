@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict
 from typing import Optional, List, Any
-from datetime import date, datetime
+from datetime import date as _Date, datetime
 
 
 # ── Auth ──────────────────────────────────────────────────────
@@ -38,7 +38,7 @@ class DocumentOut(BaseModel):
     name: str
     size: Optional[str] = None
     type: Optional[str] = None
-    upload_date: Optional[date] = None
+    upload_date: Optional[_Date] = None
     tags: List[str] = []
 
 
@@ -71,7 +71,7 @@ class QuizOut(BaseModel):
     questions: List[QuizQuestion] = []
     completed: bool = False
     score: Optional[int] = None
-    date: Optional[date] = None
+    date: Optional[_Date] = None
 
 
 # ── Flashcards ───────────────────────────────────────────────
@@ -90,7 +90,7 @@ class FlashcardSetOut(BaseModel):
 
     id: int
     title: str
-    date: Optional[date] = None
+    date: Optional[_Date] = None
     source_document_id: Optional[int] = None
     cards: List[FlashCard] = []
 
@@ -135,7 +135,7 @@ class MindMapOut(BaseModel):
 
     id: int
     title: str
-    date: Optional[date] = None
+    date: Optional[_Date] = None
     source_document_id: Optional[int] = None
     root: Optional[MindMapNode] = None
 
@@ -155,7 +155,7 @@ class AudioRecapOut(BaseModel):
 
     id: int
     title: str
-    date: Optional[date] = None
+    date: Optional[_Date] = None
     source_document_id: Optional[int] = None
     summary: Optional[str] = None
     script: List[ScriptLine] = []
@@ -177,7 +177,7 @@ class QuickReviseOut(BaseModel):
 
     id: int
     title: str
-    date: Optional[date] = None
+    date: Optional[_Date] = None
     source_document_id: Optional[int] = None
     points: List[RevisePoint] = []
 
@@ -202,7 +202,7 @@ class NoteOut(BaseModel):
     title: str
     content: Optional[str] = None
     subject: Optional[str] = None
-    date: Optional[date] = None
+    date: Optional[_Date] = None
 
 
 # ── Groups ───────────────────────────────────────────────────
@@ -259,4 +259,4 @@ class ActivityLogOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    date: Optional[date] = None
+    date: Optional[_Date] = None
