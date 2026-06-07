@@ -39,21 +39,25 @@ function ScreenMindMap({ state, dispatch }) {
   const draggingRef = useRef(null);
   const { nodes, W, H } = useMemo(() => active?.root ? layoutMindmap(active.root) : { nodes: [], W: 1000, H: 600 }, [active]);
   const [selected, setSelected] = useState(null);
+  const [sourceDocId, setSourceDocId] = useState(state.documents[0]?.id ?? null);
+  const [genError, setGenError] = useState("");
 
-  // Mount: load mind maps (fallback: keep mock maps)
+  // Mount: load mind maps. Prefer the first real map from the API over the mock.
   useEffect(() => {
     mindMapsApi.list()
       .then(maps => {
         if (Array.isArray(maps) && maps.length) {
           dispatch?.({ type: 'set-mind-maps', mindMaps: maps });
-          setActive(a => a || maps[0]);
+          setActive(maps[0]);
         }
       })
       .catch(() => { /* keep mock maps */ });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleGenerate() {
-    const docId = state.documents[0]?.id ?? null;
+    const docId = sourceDocId ?? state.documents[0]?.id;
+    if (docId == null) { setGenError("Upload a document first, then pick it as the source."); return; }
+    setGenError("");
     setGenerating(true);
     try {
       const map = await mindMapsApi.generate(docId);
@@ -61,6 +65,7 @@ function ScreenMindMap({ state, dispatch }) {
       setActive(map);
     } catch (err) {
       console.error('Mind map generation failed:', err.message);
+      setGenError(err.message || "Couldn't generate the map — the AI service may be busy. Please retry.");
     } finally {
       setGenerating(false);
     }
@@ -81,16 +86,31 @@ function ScreenMindMap({ state, dispatch }) {
           <div className="t-eyebrow">Mind map</div>
           <div className="t-display" style={{fontSize: 32, marginTop: 4}}>{active?.title}</div>
         </div>
-        <div className="row" style={{gap: 8}}>
-          <select className="input" style={{width: "auto"}} value={active?.id ?? ''} onChange={e => setActive(state.mindMaps.find(m => String(m.id) === e.target.value))}>
-            {state.mindMaps.map(m => <option key={m.id} value={m.id}>{m.title}</option>)}
-          </select>
+        <div className="row" style={{gap: 8, alignItems: "center", flexWrap: "wrap"}}>
+          {state.mindMaps.length > 0 && (
+            <select className="input" style={{width: "auto"}} value={active?.id ?? ''} onChange={e => setActive(state.mindMaps.find(m => String(m.id) === e.target.value))}>
+              {state.mindMaps.map(m => <option key={m.id} value={m.id}>{m.title}</option>)}
+            </select>
+          )}
           <button className="btn is-ghost is-sm" onClick={() => setZoom(z => Math.max(0.3, z - 0.1))}>−</button>
           <span className="kbd" style={{minWidth: 50, textAlign: "center"}}>{Math.round(zoom * 100)}%</span>
           <button className="btn is-ghost is-sm" onClick={() => setZoom(z => Math.min(1.5, z + 0.1))}>+</button>
-          <button className="btn is-accent is-sm" onClick={handleGenerate} disabled={generating}><Icon name="plus" size={12} className="" /> {generating ? 'Generating…' : 'Generate'}</button>
+          <select
+            className="input"
+            style={{width: "auto", maxWidth: 200}}
+            title="Source document to map"
+            value={sourceDocId ?? ''}
+            onChange={e => { setGenError(""); setSourceDocId(e.target.value ? Number(e.target.value) : null); }}
+            disabled={!state.documents.length}
+          >
+            {state.documents.length
+              ? state.documents.map(d => <option key={d.id} value={d.id}>{d.name}</option>)
+              : <option value="">No documents</option>}
+          </select>
+          <button className="btn is-accent is-sm" onClick={handleGenerate} disabled={generating || !(sourceDocId ?? state.documents[0]?.id)}><Icon name="plus" size={12} className="" /> {generating ? 'Generating…' : 'Generate'}</button>
         </div>
       </div>
+      {genError && <div style={{ color: "var(--err, #dc2626)", fontSize: 13 }}>{genError}</div>}
       <div className="card card-flush" style={{height: 600, overflow: "hidden", background: "var(--paper-2)", backgroundImage: "radial-gradient(circle, var(--hairline-2) 1px, transparent 1px)", backgroundSize: "22px 22px", position: "relative", cursor: "default"}}
            onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp}>
         <svg width="100%" height="100%" viewBox={`${-pan.x/zoom} ${-pan.y/zoom} ${W/zoom} ${H/zoom}`}>

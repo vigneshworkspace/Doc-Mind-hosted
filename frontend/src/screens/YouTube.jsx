@@ -2,6 +2,14 @@ import { useState } from 'react';
 import { Icon } from '../components/Shell.jsx';
 import { youtube as youtubeApi } from '../api/index.js';
 
+// "mm:ss" or "h:mm:ss" → seconds
+function tsToSec(ts) {
+  if (!ts) return 0;
+  const parts = String(ts).trim().split(':').map(Number);
+  if (parts.some(Number.isNaN)) return 0;
+  return parts.reduce((acc, n) => acc * 60 + n, 0);
+}
+
 const EXAMPLES = [
   { title: 'MIT OCW · Single Variable Calculus', duration: '47:21', channel: 'MIT OpenCourseWare', url: 'https://www.youtube.com/watch?v=jbIQW0gkgxo' },
   { title: 'The actual history of the Roman Empire', duration: '1:24:08', channel: 'Crash Course', url: 'https://www.youtube.com/watch?v=GBaHPND2QJg' },
@@ -13,12 +21,14 @@ export default function YouTube() {
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzeError, setAnalyzeError] = useState('');
   const [result, setResult] = useState(null);
+  const [startSec, setStartSec] = useState(0); // chapter seek → iframe ?start=
 
   async function handleAnalyze(overrideUrl) {
     const target = (overrideUrl ?? url).trim();
     if (!target) return;
     setAnalyzing(true);
     setAnalyzeError('');
+    setStartSec(0);
     try {
       // r shape: { video_id, transcript, summary, chapters: [{timestamp, title}], key_points[] }
       const r = await youtubeApi.summarize(target);
@@ -83,13 +93,25 @@ export default function YouTube() {
         <div className="grid" style={{ gridTemplateColumns: '1.6fr 1fr', gap: 18 }}>
           <div className="col" style={{ gap: 14 }}>
             <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-              <div style={{ aspectRatio: '16/9', background: 'var(--ink)', display: 'grid', placeItems: 'center', position: 'relative', color: 'var(--paper)' }}>
-                <Icon name="play" size={48} className="" />
-                <div style={{ position: 'absolute', bottom: 12, left: 12, right: 12 }}>
-                  <div className="t-display" style={{ fontSize: 24, color: 'white' }}>YouTube video</div>
-                  <div style={{ fontSize: 12, opacity: 0.7 }}>{result.video_id || ''}</div>
+              {result.video_id ? (
+                <div style={{ aspectRatio: '16/9' }}>
+                  <iframe
+                    key={startSec}
+                    width="100%"
+                    height="100%"
+                    src={`https://www.youtube-nocookie.com/embed/${result.video_id}?rel=0&modestbranding=1&start=${startSec}${startSec ? '&autoplay=1' : ''}`}
+                    title="YouTube video player"
+                    style={{ border: 0, display: 'block' }}
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    referrerPolicy="strict-origin-when-cross-origin"
+                    allowFullScreen
+                  />
                 </div>
-              </div>
+              ) : (
+                <div style={{ aspectRatio: '16/9', background: 'var(--ink)', display: 'grid', placeItems: 'center', color: 'var(--paper)' }}>
+                  <span className="muted" style={{ color: 'var(--ink-4)' }}>No playable video id</span>
+                </div>
+              )}
             </div>
             <div className="card">
               <div className="t-eyebrow" style={{ marginBottom: 10 }}>Summary</div>
@@ -120,10 +142,16 @@ export default function YouTube() {
               <div className="muted" style={{ padding: '14px 16px', fontSize: 13 }}>No chapters detected.</div>
             )}
             {chapters.map((ch, i) => (
-              <div key={i} className="row" style={{ padding: '10px 16px', gap: 12, borderBottom: i === chapters.length - 1 ? 0 : '1px solid var(--hairline)', cursor: 'default' }}>
-                <span className="t-mono" style={{ color: 'var(--ink-3)', fontSize: 12, minWidth: 50 }}>{ch.timestamp}</span>
+              <button
+                key={i}
+                onClick={() => setStartSec(tsToSec(ch.timestamp))}
+                title="Jump to this chapter"
+                className="lift"
+                style={{ display: 'flex', alignItems: 'center', width: '100%', textAlign: 'left', padding: '10px 16px', gap: 12, border: 0, borderBottom: i === chapters.length - 1 ? 0 : '1px solid var(--hairline)', background: 'transparent', cursor: 'pointer' }}
+              >
+                <span className="t-mono" style={{ color: 'var(--accent)', fontSize: 12, minWidth: 50 }}>{ch.timestamp}</span>
                 <span style={{ fontSize: 13.5 }}>{ch.title}</span>
-              </div>
+              </button>
             ))}
           </div>
         </div>

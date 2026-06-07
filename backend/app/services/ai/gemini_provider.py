@@ -7,6 +7,26 @@ from google.genai import errors
 from .provider import LLMProvider
 from . import gemini_key_manager
 
+def _parse_json_response(text: str, schema):
+    """Robustly coerce a model response into the schema. Handles raw JSON, fenced
+    JSON, and JSON embedded in prose (first {...}/[...] span). Raises on empty/garbage."""
+    import re as _re
+    if not text or not text.strip():
+        raise ValueError("empty model response")
+    for candidate in (
+        text,
+        text.replace("```json", "").replace("```", "").strip(),
+    ):
+        try:
+            return schema.model_validate_json(candidate)
+        except Exception:
+            pass
+    m = _re.search(r"[\[{].*[\]}]", text, _re.DOTALL)
+    if m:
+        return schema.model_validate_json(m.group(0))
+    raise ValueError("no parseable JSON in model response")
+
+
 class GeminiProvider(LLMProvider):
     def __init__(self):
         # Get key from key manager (rotates automatically)
@@ -56,6 +76,11 @@ class GeminiProvider(LLMProvider):
             return response.text
         except Exception as e:
             error_str = str(e).lower()
+            # Model/config error (bad model id, model not enabled) — not the key's
+            # fault. Surface it without disabling the key, so a wrong LLM_MODEL can't
+            # silently brick a working key.
+            if any(s in error_str for s in ("not found", "does not exist", "not supported", "unsupported", " 404")):
+                raise
             if "quota" in error_str or "429" in error_str or "rate limit" in error_str:
                 gemini_key_manager.mark_key_quota_exceeded(self.current_key)
                 # Try with new key
@@ -87,10 +112,14 @@ class GeminiProvider(LLMProvider):
             gemini_key_manager.mark_key_success(self.current_key)
         except Exception as e:
             error_str = str(e).lower()
+            if any(s in error_str for s in ("not found", "does not exist", "not supported", "unsupported", " 404")):
+                raise
             if "quota" in error_str or "429" in error_str or "rate limit" in error_str:
                 gemini_key_manager.mark_key_quota_exceeded(self.current_key)
                 if chunks_yielded:
-                    yield "\n\n[ERROR: stream interrupted, please retry]"
+                    # Surface the failure instead of injecting error text into the
+                    # answer stream; the transport layer emits a distinct error frame.
+                    raise
                 else:
                     # No chunks yielded yet — safe to retry with new key
                     self.client = self._get_new_client()
@@ -105,7 +134,9 @@ class GeminiProvider(LLMProvider):
             else:
                 gemini_key_manager.mark_key_error(self.current_key)
                 if chunks_yielded:
-                    yield "\n\n[ERROR: stream interrupted, please retry]"
+                    # Surface the failure instead of injecting error text into the
+                    # answer stream; the transport layer emits a distinct error frame.
+                    raise
                 else:
                     raise
 
@@ -129,11 +160,7 @@ class GeminiProvider(LLMProvider):
                 config=config,
             )
             gemini_key_manager.mark_key_success(self.current_key)
-            try:
-                return schema.model_validate_json(response.text)
-            except Exception:
-                cleaned = response.text.replace("```json", "").replace("```", "").strip()
-                return schema.model_validate_json(cleaned)
+            return _parse_json_response(response.text, schema)
         except Exception as e:
             error_str = str(e).lower()
             if "quota" in error_str or "429" in error_str or "rate limit" in error_str:
@@ -145,11 +172,7 @@ class GeminiProvider(LLMProvider):
                     config=config,
                 )
                 gemini_key_manager.mark_key_success(self.current_key)
-                try:
-                    return schema.model_validate_json(response.text)
-                except Exception:
-                    cleaned = response.text.replace("```json", "").replace("```", "").strip()
-                    return schema.model_validate_json(cleaned)
+                return _parse_json_response(response.text, schema)
             else:
                 gemini_key_manager.mark_key_error(self.current_key)
                 raise

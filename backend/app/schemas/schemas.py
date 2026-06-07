@@ -171,6 +171,7 @@ class AudioRecapOut(BaseModel):
     source_document_id: Optional[int] = None
     summary: Optional[str] = None
     script: List[ScriptLine] = []
+    audio_url: Optional[str] = None
     processing_status: str = "queued"
 
 
@@ -254,7 +255,7 @@ class SettingsOut(BaseModel):
     notifications: bool = True
     auto_save: bool = True
     study_reminders: bool = False
-    ai_provider: str = "anthropic"
+    ai_provider: str = "gemini"
     ollama_endpoint: str = "http://localhost:11434"
 
 

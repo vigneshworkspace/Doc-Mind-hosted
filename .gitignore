@@ -2,6 +2,11 @@ backend/app/__pycache__
 backend/**/__pycache__
 backend/.env
 **/.env
+# env backups/variants often hold real keys — never track them
+**/.env.bak
+**/.env.*.bak
+*.env.bak
+!**/.env.example
 backend/*.db
 
 # Secrets — API keys

@@ -27,6 +27,16 @@ RUN pip install --no-cache-dir \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# docling-ibm-models pulls a PyPI torchvision whose compiled ops (torchvision::nms)
+# are ABI-incompatible with the CPU torch installed above. That broken import
+# cascades through transformers and breaks Coqui TTS (`import TTS`). Voice + RAG
+# need no vision ops; remove torchvision so TTS loads. Docling uses its text path.
+RUN pip uninstall -y torchvision
+
+# Cache-bust the source copy: BuildKit otherwise reuses a stale COPY layer and
+# misses app/ edits. Pass `--build-arg CACHEBUST=$(date +%s)` to force a fresh copy
+# without rebuilding the heavy pip layers above.
+ARG CACHEBUST=0
 COPY . .
 
 EXPOSE 8000

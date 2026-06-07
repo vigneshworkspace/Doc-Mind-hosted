@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Icon } from '../components/Shell';
+import { ErrorRetry } from '../components/GenState.jsx';
 import { quizzes as quizzesApi } from '../api/index.js';
 
 const SAMPLE_QUIZ_QUESTIONS = [
@@ -12,33 +13,53 @@ const SAMPLE_QUIZ_QUESTIONS = [
 
 function ScreenQuiz({ state, dispatch, setTab }) {
   const [mode, setMode] = useState("config"); // config | taking | result
-  const [config, setConfig] = useState({ docId: state.documents[0]?.id ?? "", count: 5, difficulty: "medium" });
+  const [config, setConfig] = useState({ docId: state.documents[0]?.id ?? "", count: 5, difficulty: "medium", adaptive: false });
   const [questions, setQuestions] = useState([]);
   const [idx, setIdx] = useState(0);
   const [answers, setAnswers] = useState({});
   const [generating, setGenerating] = useState(false);
+  const [error, setError] = useState("");
+  // Set when adaptive was requested but the server had no score history to learn
+  // from and explicitly fell back to a normal quiz. We surface this honestly.
+  const [adaptiveNote, setAdaptiveNote] = useState("");
+  // Honesty contract: on a failed list() we show an error + Retry, never fabricated rows.
+  const [listError, setListError] = useState("");
 
-  // Mount: load real quiz list (fallback: keep mock quizzes)
-  useEffect(() => {
+  // Mount: load the real quiz list. On failure we surface ErrorRetry and leave the
+  // collection empty — never substitute seeded sample quizzes.
+  const reloadList = useCallback(() => {
+    setListError("");
     quizzesApi.list()
       .then(qs => dispatch({ type: 'set-quizzes', quizzes: qs }))
-      .catch(() => { /* keep mock quizzes */ });
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+      .catch(e => setListError(e.message || "Couldn't load your quizzes — please retry."));
+  }, [dispatch]);
+
+  useEffect(() => { reloadList(); }, [reloadList]);
 
   async function startQuiz() {
     setGenerating(true);
+    setError("");
+    setAdaptiveNote("");
     try {
-      const result = await quizzesApi.generate(config.docId || null, config.count, config.difficulty);
-      const qs = Array.isArray(result) ? result : result.questions;
-      setQuestions(qs && qs.length ? qs : SAMPLE_QUIZ_QUESTIONS.slice(0, config.count));
-    } catch {
-      // Fallback to local sample questions
-      setQuestions(SAMPLE_QUIZ_QUESTIONS.slice(0, config.count));
-    } finally {
-      setGenerating(false);
+      const result = await quizzesApi.generate(config.docId || null, {
+        count: config.count,
+        difficulty: config.difficulty,
+        adaptive: config.adaptive,
+      });
+      const qs = (result && result.questions) || [];
+      if (!qs.length) throw new Error("No questions were generated. Try a different document.");
+      // Honesty contract: when adaptive was requested but the server had no score
+      // history, it falls back to a normal quiz and returns adaptiveNote. Surface it.
+      if (config.adaptive && result.adaptiveNote) setAdaptiveNote(result.adaptiveNote);
+      // Real questions only — never silently substitute sample content.
+      setQuestions(qs);
       setIdx(0);
       setAnswers({});
       setMode("taking");
+    } catch (e) {
+      setError(e.message || "Couldn't generate a quiz — the AI service may be busy. Please retry.");
+    } finally {
+      setGenerating(false);
     }
   }
 
@@ -90,6 +111,17 @@ function ScreenQuiz({ state, dispatch, setTab }) {
                 <option value="">General knowledge</option>
               </select>
             </div>
+            {listError && (
+              <ErrorRetry message={listError} onRetry={reloadList} />
+            )}
+            {error && (
+              <ErrorRetry message={error} onRetry={startQuiz} />
+            )}
+            {adaptiveNote && (
+              <div style={{ fontSize: 12.5, lineHeight: 1.5, color: "var(--ink-2)", padding: "10px 12px", borderRadius: 8, background: "var(--paper-2)", borderLeft: "3px solid var(--accent)" }}>
+                {adaptiveNote}
+              </div>
+            )}
             <div>
               <label className="field-label">Difficulty</label>
               <div className="row" style={{gap: 6}}>
@@ -99,6 +131,22 @@ function ScreenQuiz({ state, dispatch, setTab }) {
                     style={{flex: 1}}>{l}</button>
                 ))}
               </div>
+            </div>
+            <div>
+              <label className="field-label">Mode</label>
+              <button
+                type="button"
+                onClick={() => setConfig(c => ({...c, adaptive: !c.adaptive}))}
+                className={`btn is-sm ${config.adaptive ? "is-accent" : "is-ghost"}`}
+                aria-pressed={config.adaptive}
+                style={{width: "100%", justifyContent: "flex-start", gap: 10}}>
+                <Icon name="sparkles" size={13} className="" />
+                Adaptive (focus my weak areas)
+                <span style={{marginLeft: "auto", fontSize: 11, color: "var(--ink-3)"}}>{config.adaptive ? "On" : "Off"}</span>
+              </button>
+              <p className="muted" style={{fontSize: 11.5, marginTop: 6, lineHeight: 1.45}}>
+                Targets topics you scored low on in past quizzes. Needs some completed quizzes first.
+              </p>
             </div>
             <div>
               <label className="field-label">Number of questions — {config.count}</label>

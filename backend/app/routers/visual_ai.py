@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, UploadFile, File, Form
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
 from sqlalchemy.orm import Session
 from app.core.deps import get_db, get_current_user
 from app.models.orm import User
 from app.services import generators
+from app.services.generators import GenerationError
 
 router = APIRouter()
 
@@ -16,4 +17,8 @@ async def solve(
 ):
     content = await file.read()
     mime = file.content_type or "image/png"
-    return await generators.solve_visual(content, mime, prompt)
+    try:
+        result = await generators.solve_visual(content, mime, prompt)
+    except GenerationError:
+        raise HTTPException(status_code=503, detail="Visual solve failed. Please retry.")
+    return {**result, "is_demo": not generators._has_provider()}

@@ -26,7 +26,8 @@ async def expand_query(query: str) -> list[str]:
             system_prompt="Return JSON only.",
         )
         return [query] + result.rewrites[:3]
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Query expansion failed, using original query only: {e}")
         return [query]
 
 
@@ -41,5 +42,6 @@ async def decompose_query(query: str) -> list[str]:
             system_prompt="Return JSON only.",
         )
         return result.sub_queries if result.sub_queries else [query]
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Query decomposition failed, using original query only: {e}")
         return [query]

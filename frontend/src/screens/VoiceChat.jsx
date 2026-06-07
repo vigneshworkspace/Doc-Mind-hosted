@@ -58,7 +58,11 @@ export default function VoiceChat() {
       setStatus('listening');
 
       const token = getToken();
-      const wsUrl = `ws://localhost:8000/api/v1/voice/ws${token ? `?token=${token}` : ''}`;
+      // Derive the WS URL from the page origin so it works behind any host/proxy
+      // (the app and API share an origin — see api/client.js BASE = '/api/v1').
+      // wss:// when served over https, ws:// otherwise.
+      const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${wsProto}//${window.location.host}/api/v1/voice/ws${token ? `?token=${encodeURIComponent(token)}` : ''}`;
       const ws = new WebSocket(wsUrl);
       ws.binaryType = 'blob';
       wsRef.current = ws;

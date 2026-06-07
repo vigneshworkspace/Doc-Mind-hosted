@@ -27,6 +27,7 @@ DDL = [
        GENERATED ALWAYS AS (to_tsvector('english', contextualized_text)) STORED""",
     "CREATE INDEX IF NOT EXISTS chunks_fts_gin ON chunks USING gin(fts)",
     "CREATE INDEX IF NOT EXISTS chunks_user_doc ON chunks(user_id, document_id)",
+    "ALTER TABLE audio_recaps ADD COLUMN IF NOT EXISTS audio_path varchar(1000)",
 ]
 with engine.begin() as conn:
     for stmt in DDL:

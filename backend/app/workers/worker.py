@@ -19,5 +19,5 @@ def get_redis_settings() -> RedisSettings:
 class WorkerSettings:
     functions = [ingest_document, generate_audio_recap_task]
     redis_settings = get_redis_settings()
-    max_jobs = 4
-    job_timeout = 600
+    max_jobs = 2          # TTS render is CPU-heavy — avoid thrashing cores
+    job_timeout = 1800    # 30 min: a long recap is ~20-30 CPU TTS syntheses

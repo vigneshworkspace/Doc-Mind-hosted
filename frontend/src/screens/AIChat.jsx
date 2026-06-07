@@ -1,11 +1,103 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Icon } from '../components/Shell';
 import foxHeadImg from '../assets/fox-head.png';
-import { streamSSE } from '../api/stream.js';
+import { documents as docsApi } from '../api/index.js';
+import { getToken } from '../api/client.js';
+import { ErrorRetry } from '../components/GenState.jsx';
 import LoaderHelix from '../components/LoaderHelix.jsx';
+import PdfPane from '../components/PdfPane.jsx';
+
+const clampW = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+
+// Draggable split divider between the chat and the PDF pane. Reports the live
+// cursor X to the parent, which converts it to a clamped pane width.
+function PaneResizer({ onResize }) {
+  const onDown = (e) => {
+    e.preventDefault();
+    const move = (ev) => onResize(ev.clientX);
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  };
+  return <div className="pdfpane-resizer" onMouseDown={onDown} role="separator" aria-label="Resize PDF pane" />;
+}
+
+// Local SSE reader for the chat stream. The shared streamSSE generator yields only
+// string tokens and silently drops object frames, so it cannot surface the terminal
+// citations frame the backend emits. Rather than edit the shared helper, this screen
+// reads the stream directly: it invokes onToken for every reply token and onCitations
+// once for the final { __citations__: [...] } frame. Throws on the __error__ frame or
+// a non-OK response, exactly like streamSSE, so the caller's catch path is unchanged.
+async function streamChat(body, { onToken, onCitations }) {
+  const token = getToken();
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  const resp = await fetch('/api/v1/chat/stream', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+    credentials: 'include',
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+    throw new Error(err.detail || `HTTP ${resp.status}`);
+  }
+
+  const reader = resp.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const lines = buf.split('\n');
+    buf = lines.pop(); // keep the incomplete trailing line
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      const raw = line.slice(6);
+      if (raw.trim() === '[DONE]') return;
+      if (!raw) continue;
+      let val;
+      try { val = JSON.parse(raw); } catch { continue; }
+      if (val && typeof val === 'object') {
+        if (val.__error__) throw new Error(val.__error__);
+        if (Array.isArray(val.__citations__)) onCitations(val.__citations__);
+        continue; // never treat a structured frame as a token
+      }
+      if (typeof val === 'string' && val.length) onToken(val);
+    }
+  }
+}
+
+// snake_case citation frame → the camelCase shape the panel renders. The backend
+// frame bypasses api/index.js's normalize, so this screen does the one mapping it
+// needs locally.
+function normalizeCitations(list) {
+  return (list || []).map((c, i) => ({
+    key: `${c.document_id ?? 'd'}-${c.page_start ?? '?'}-${i}`,
+    documentId: c.document_id ?? null,
+    pageStart: c.page_start ?? null,
+    pageEnd: c.page_end ?? null,
+    snippet: c.snippet ?? '',
+  }));
+}
+
+function citationPageLabel(c) {
+  if (c.pageStart == null) return null;
+  if (c.pageEnd != null && c.pageEnd !== c.pageStart) return `pp. ${c.pageStart}–${c.pageEnd}`;
+  return `p. ${c.pageStart}`;
+}
 
 // ── Elevated message component ────────────────────────────────
-function ElevatedMessage({ msg, isHovered, isCopied, onHover, onCopy }) {
+function ElevatedMessage({ msg, isHovered, isCopied, onHover, onCopy, citationDocName, onOpenSource }) {
   const isAI = msg.sender === "ai";
   const timeStr = msg.ts
     ? new Date(msg.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
@@ -41,15 +133,28 @@ function ElevatedMessage({ msg, isHovered, isCopied, onHover, onCopy }) {
           }}>{timeStr}</span>
         </div>
 
-        {/* Prose text */}
+        {/* Prose text — error replies are visually distinct, never styled as a
+            normal grounded answer. */}
         <div style={{
-          paddingLeft: 33,
+          marginLeft: 33,
+          paddingLeft: msg.error ? 12 : 0,
+          borderLeft: msg.error ? "2px solid var(--err, #dc2626)" : "none",
           fontSize: 15, lineHeight: 1.72,
-          color: "var(--ink)", letterSpacing: -0.004,
+          color: msg.error ? "var(--err, #dc2626)" : "var(--ink)", letterSpacing: -0.004,
           textWrap: "pretty", whiteSpace: "pre-wrap",
         }}>
           {msg.text}
         </div>
+
+        {/* Citations — the grounding chunks behind this answer. Hidden on error
+            replies, which never carry sources. */}
+        {!msg.error && msg.citations && msg.citations.length > 0 && (
+          <CitationsPanel
+            citations={msg.citations}
+            docName={citationDocName}
+            onOpen={onOpenSource}
+          />
+        )}
 
         {/* Hover actions */}
         <div style={{
@@ -190,6 +295,88 @@ function ChatDivider({ label }) {
   );
 }
 
+// ── Citations panel ───────────────────────────────────────────
+// Rendered under a grounded AI answer. Each row is the chunk reference that
+// backed the reply; clicking opens the source at that page with the snippet
+// highlighted (onOpen).
+function CitationsPanel({ citations, docName, onOpen }) {
+  if (!citations || citations.length === 0) return null;
+  return (
+    <div style={{ marginLeft: 33, marginTop: 12 }}>
+      <div style={{
+        fontSize: 10, fontWeight: 700, letterSpacing: 0.1,
+        color: "var(--ink-4)", textTransform: "uppercase", marginBottom: 8,
+        display: "flex", alignItems: "center", gap: 6,
+      }}>
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M7 3h7l5 5v11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"/><path d="M14 3v5h5"/>
+        </svg>
+        {citations.length} {citations.length === 1 ? "source" : "sources"}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {citations.map((c, i) => {
+          const page = citationPageLabel(c);
+          return (
+            <button
+              key={c.key}
+              type="button"
+              onClick={() => onOpen(c)}
+              title="Open source"
+              style={{
+                textAlign: "left",
+                display: "grid",
+                gridTemplateColumns: "auto 1fr",
+                gap: 10, alignItems: "start",
+                padding: "9px 12px",
+                border: "1px solid var(--hairline)",
+                borderRadius: 10,
+                background: "var(--card)",
+                cursor: "pointer",
+                transition: "border-color 0.12s, background 0.12s",
+              }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = "color-mix(in oklch, var(--accent) 40%, var(--hairline))"; }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--hairline)"; }}
+            >
+              <span style={{
+                display: "inline-flex", alignItems: "center", justifyContent: "center",
+                minWidth: 20, height: 20, padding: "0 6px",
+                fontSize: 10.5, fontWeight: 700,
+                fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+                color: "var(--accent-ink)",
+                background: "color-mix(in oklch, var(--accent) 12%, var(--card))",
+                border: "1px solid color-mix(in oklch, var(--accent) 22%, var(--hairline))",
+                borderRadius: 6, marginTop: 1,
+              }}>{i + 1}</span>
+              <span style={{ minWidth: 0 }}>
+                <span style={{
+                  display: "flex", alignItems: "center", gap: 8,
+                  fontSize: 11.5, fontWeight: 600, color: "var(--ink-2)", marginBottom: 3,
+                }}>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {docName || (c.documentId != null ? `Document ${c.documentId}` : "Source")}
+                  </span>
+                  {page && (
+                    <span style={{
+                      flexShrink: 0,
+                      fontSize: 10, fontWeight: 600, color: "var(--ink-4)",
+                      fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+                    }}>{page}</span>
+                  )}
+                </span>
+                <span style={{
+                  display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical",
+                  overflow: "hidden",
+                  fontSize: 12.5, lineHeight: 1.5, color: "var(--ink-3)",
+                }}>{c.snippet}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ── Suggestion grid for empty state ───────────────────────────
 const CHAT_SUGGESTIONS = [
   {
@@ -214,26 +401,6 @@ const CHAT_SUGGESTIONS = [
   },
 ];
 
-// ── Fallback synthesizer (used when Claude is unavailable) ────
-function synthesizeFallback(q, ctx, docs) {
-  const doc = docs.find(d => String(d.id) === String(ctx));
-  const docCtx = doc ? ` of *${doc.name.replace(/\.[a-z]+$/i, "")}*` : "";
-  const lq = q.toLowerCase();
-  if (lq.includes("summari")) {
-    return `Here's a concise summary${docCtx}:\n\n• Core idea: the central thesis is stated up-front.\n• Three supporting frameworks anchor the argument.\n• Two case studies illustrate edge behaviour.\n• Limitations are acknowledged.\n• Future work points toward unresolved questions.`;
-  }
-  if (lq.includes("quiz") || lq.includes("test me")) {
-    return `Happy to quiz you. Head to the Quizzes tab and I'll draft 10 questions — or tell me the topic and difficulty and I'll ask right here.`;
-  }
-  if (lq.includes("explain") || lq.includes("break down")) {
-    return `Think of it this way:\n\nThe rule applies to composite functions — treat the outer and inner parts separately. Find the derivative of each, then multiply them together.\n\nExample: for sin(x²), the outer is sin (derivative: cos) and the inner is x² (derivative: 2x). Result: cos(x²) · 2x.`;
-  }
-  if (lq.includes("compar")) {
-    return `Both share common ground but diverge on key points. The most useful way to compare is along three axes: origin, mechanism, and real-world consequence. Would you like me to build a structured table?`;
-  }
-  return `Good question${docCtx ? ` about ${docCtx}` : ""}. There are a few angles worth exploring — the short answer depends on how deep you want to go. Tell me your current understanding and I'll calibrate.`;
-}
-
 // ── Main screen ───────────────────────────────────────────────
 function ScreenAIChat({ state, dispatch }) {
   const [messages, setMessages] = useState([
@@ -245,9 +412,104 @@ function ScreenAIChat({ state, dispatch }) {
   const [copiedId, setCopiedId] = useState(null);
   const [hoverId, setHoverId] = useState(null);
 
+  // Document picker — loaded from the real list endpoint. On failure we show
+  // ErrorRetry instead of falling back to seeded/mock docs (honesty contract).
+  const [docs, setDocs] = useState([]);
+  const [docsError, setDocsError] = useState('');
+  const [docsLoading, setDocsLoading] = useState(true);
+
+  // PDF reading pane — { doc, page, snippet } currently open, or null.
+  const [pdfPane, setPdfPane] = useState(null);
+  const [paneW, setPaneW] = useState(() => {
+    const v = Number(localStorage.getItem('docmind.pdfPaneW'));
+    return v >= 380 ? v : 480;
+  });
+  // Under 1040px the split is too tight — the pane becomes a slide-over drawer.
+  const [isNarrow, setIsNarrow] = useState(
+    () => typeof window !== 'undefined' && window.innerWidth < 1040
+  );
+  useEffect(() => {
+    const onR = () => setIsNarrow(window.innerWidth < 1040);
+    window.addEventListener('resize', onR);
+    return () => window.removeEventListener('resize', onR);
+  }, []);
+
+  const onPaneResize = useCallback((clientX) => {
+    const w = clampW(window.innerWidth - clientX, 380, Math.min(760, window.innerWidth * 0.6));
+    setPaneW(w);
+    localStorage.setItem('docmind.pdfPaneW', String(Math.round(w)));
+  }, []);
+
+  const loadDocs = useCallback(() => {
+    setDocsLoading(true);
+    setDocsError('');
+    docsApi.list()
+      .then(list => {
+        const arr = Array.isArray(list) ? list : [];
+        setDocs(arr);
+        // Share the real list with the rest of the app, replacing seed data.
+        dispatch({ type: 'set-documents', documents: arr });
+      })
+      .catch(e => setDocsError(e?.message || 'Could not load your documents.'))
+      .finally(() => setDocsLoading(false));
+  }, [dispatch]);
+
+  useEffect(() => { loadDocs(); }, [loadDocs]);
+
+  // documentId -> display name, for labelling citations and the source drawer.
+  const docNameById = useMemo(() => {
+    const m = new Map();
+    for (const d of docs) m.set(String(d.id), (d.name || '').replace(/\.[a-z]+$/i, ""));
+    return m;
+  }, [docs]);
+
+  // Open the reading pane for a document (by id or doc object).
+  const openDocPane = useCallback((idOrDoc, { page = 1, snippet = '' } = {}) => {
+    const d = (idOrDoc && typeof idOrDoc === 'object')
+      ? idOrDoc
+      : (docs.find(x => String(x.id) === String(idOrDoc)) || { id: idOrDoc, name: '', type: '' });
+    setPdfPane({ doc: d, page, snippet });
+  }, [docs]);
+
+  // Citation click → open the cited doc at its page, highlight the snippet.
+  const handleOpenSource = useCallback((citation) => {
+    const d = docs.find(x => String(x.id) === String(citation.documentId)) || null;
+    setPdfPane({ doc: d, page: citation.pageStart || 1, snippet: citation.snippet || '' });
+  }, [docs]);
+
   const endRef = useRef(null);
   const scrollRef = useRef(null);
   const textRef = useRef(null);
+  const recogRef = useRef(null);
+  const [listening, setListening] = useState(false);
+  const sttOK = typeof window !== 'undefined' && ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window);
+
+  // Dictate into the composer using the browser's SpeechRecognition.
+  function toggleDictation() {
+    if (!sttOK) return;
+    if (listening) { recogRef.current?.stop(); return; }
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const r = new SR();
+    r.lang = 'en-US';
+    r.interimResults = true;
+    r.continuous = false;
+    let base = input ? input + ' ' : '';
+    let final = base;
+    r.onresult = (e) => {
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript;
+        if (e.results[i].isFinal) final += t; else interim += t;
+      }
+      setInput((final + interim).trim());
+    };
+    r.onend = () => { setListening(false); recogRef.current = null; };
+    r.onerror = () => { setListening(false); recogRef.current = null; };
+    recogRef.current = r;
+    setListening(true);
+    r.start();
+  }
+  useEffect(() => () => { try { recogRef.current?.stop(); } catch { /* noop */ } }, []);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -286,45 +548,55 @@ function ScreenAIChat({ state, dispatch }) {
     let firstChunk = true;
     let streamed = false;
     try {
-      for await (const token of streamSSE('/chat/stream', body)) {
-        if (firstChunk) {
-          setMessages(m => [...m, { id: aiMsgId, sender: "ai", text: token, ts: Date.now() }]);
-          setThinking(false);
-          firstChunk = false;
-          streamed = true;
-        } else {
-          // The streaming bubble is always the last message — append in place
-          // instead of mapping the whole array on every token (O(1) vs O(n)).
-          setMessages(m => {
-            const last = m[m.length - 1];
-            if (!last || last.id !== aiMsgId) return m;
-            const next = m.slice();
-            next[next.length - 1] = { ...last, text: last.text + token };
-            return next;
-          });
-        }
-      }
+      await streamChat(body, {
+        onToken: (token) => {
+          if (firstChunk) {
+            setMessages(m => [...m, { id: aiMsgId, sender: "ai", text: token, ts: Date.now() }]);
+            setThinking(false);
+            firstChunk = false;
+            streamed = true;
+          } else {
+            // The streaming bubble is always the last message — append in place
+            // instead of mapping the whole array on every token (O(1) vs O(n)).
+            setMessages(m => {
+              const last = m[m.length - 1];
+              if (!last || last.id !== aiMsgId) return m;
+              const next = m.slice();
+              next[next.length - 1] = { ...last, text: last.text + token };
+              return next;
+            });
+          }
+        },
+        // Terminal frame: attach the grounding citations to the answer bubble.
+        onCitations: (raw) => {
+          const citations = normalizeCitations(raw);
+          if (citations.length === 0) return;
+          setMessages(m => m.map(msg => msg.id === aiMsgId ? { ...msg, citations } : msg));
+        },
+      });
     } catch (e) {
-      // Backend unavailable — fall back to local synthesizer
-      const fallback = synthesizeFallback(t, ctxDoc, state.documents);
+      // Surface a real error — never fabricate a mock answer that looks grounded.
       setThinking(false);
+      const errText = (e && e.message) ? e.message : "DocMind is unavailable. Please retry.";
       if (firstChunk) {
-        setMessages(m => [...m, { id: aiMsgId, sender: "ai", text: fallback, ts: Date.now() }]);
+        setMessages(m => [...m, { id: aiMsgId, sender: "ai", text: errText, ts: Date.now(), error: true }]);
         firstChunk = false;
       } else {
-        setMessages(m => m.map(msg => msg.id === aiMsgId && !msg.text ? { ...msg, text: fallback } : msg));
+        // Partial answer already shown; flag the bubble as interrupted.
+        setMessages(m => m.map(msg => msg.id === aiMsgId
+          ? { ...msg, error: true, text: (msg.text || "") + "\n\n_(response interrupted — please retry)_" }
+          : msg));
       }
     }
     if (firstChunk) {
-      // Backend returned 200 but no tokens — show fallback
+      // 200 but no tokens — honest empty state, not a fabricated answer.
       setThinking(false);
-      const fallback = synthesizeFallback(t, ctxDoc, state.documents);
-      setMessages(m => [...m, { id: aiMsgId, sender: "ai", text: fallback, ts: Date.now() }]);
+      setMessages(m => [...m, { id: aiMsgId, sender: "ai", text: "No response was generated. Please retry.", ts: Date.now(), error: true }]);
     }
     void streamed;
   }
 
-  const activeDoc = state.documents.find(d => String(d.id) === String(ctxDoc));
+  const activeDoc = docs.find(d => String(d.id) === String(ctxDoc));
   const showEmpty = messages.length <= 1;
 
   // Group messages into date clusters — when empty, skip the lone greeting
@@ -347,11 +619,17 @@ function ScreenAIChat({ state, dispatch }) {
 
   return (
     <div style={{
-      display: "flex", flexDirection: "column",
+      display: "flex",
       height: "100%",
       marginInline: "-36px", marginTop: -28, marginBottom: -80,
       fontFamily: "var(--f-body)",
     }}>
+
+      {/* ── Chat column ────────────────────────────────────── */}
+      <div style={{
+        display: "flex", flexDirection: "column",
+        flex: "1 1 0", minWidth: 360, height: "100%",
+      }}>
 
       {/* ── Header ─────────────────────────────────────────── */}
       <div style={{
@@ -380,36 +658,58 @@ function ScreenAIChat({ state, dispatch }) {
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-          {/* doc context selector */}
-          <div style={{
-            display: "flex", alignItems: "center",
-            height: 34, borderRadius: 100,
-            border: "1px solid var(--hairline)",
-            background: "var(--card)", overflow: "hidden",
-          }}>
-            <span style={{
-              padding: "0 8px 0 14px",
-              fontSize: 11, fontWeight: 600, letterSpacing: 0.04,
-              color: "var(--ink-4)", textTransform: "uppercase",
-              whiteSpace: "nowrap",
-            }}>Doc</span>
-            <select
-              value={ctxDoc}
-              onChange={e => setCtxDoc(e.target.value)}
+          {/* doc context picker — real list; on failure a retry, never mock docs */}
+          {docsError ? (
+            <button
+              type="button"
+              onClick={loadDocs}
+              title={docsError}
               style={{
-                border: 0, outline: 0, background: "transparent",
-                color: "var(--ink)", font: "inherit",
-                fontSize: 12.5, fontWeight: 500,
-                padding: "0 14px 0 4px",
-                cursor: "pointer", maxWidth: 200,
+                display: "inline-flex", alignItems: "center", gap: 6,
+                height: 34, padding: "0 14px", borderRadius: 100,
+                border: "1px solid color-mix(in oklch, var(--danger) 32%, var(--hairline))",
+                background: "color-mix(in oklch, var(--danger), var(--card) 90%)",
+                color: "color-mix(in oklch, var(--danger) 60%, var(--ink))",
+                fontSize: 12, fontWeight: 500, cursor: "pointer", whiteSpace: "nowrap",
               }}
             >
-              <option value="">None</option>
-              {state.documents.map(d => (
-                <option key={d.id} value={d.id}>{d.name.replace(/\.[a-z]+$/i, "")}</option>
-              ))}
-            </select>
-          </div>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+              Docs failed — retry
+            </button>
+          ) : (
+            <div style={{
+              display: "flex", alignItems: "center",
+              height: 34, borderRadius: 100,
+              border: "1px solid var(--hairline)",
+              background: "var(--card)", overflow: "hidden",
+            }}>
+              <span style={{
+                padding: "0 8px 0 14px",
+                fontSize: 11, fontWeight: 600, letterSpacing: 0.04,
+                color: "var(--ink-4)", textTransform: "uppercase",
+                whiteSpace: "nowrap",
+              }}>Doc</span>
+              <select
+                value={ctxDoc}
+                onChange={e => { const v = e.target.value; setCtxDoc(v); if (v) openDocPane(v, { page: 1 }); }}
+                disabled={docsLoading}
+                aria-label="Document context"
+                style={{
+                  border: 0, outline: 0, background: "transparent",
+                  color: "var(--ink)", font: "inherit",
+                  fontSize: 12.5, fontWeight: 500,
+                  padding: "0 14px 0 4px",
+                  cursor: docsLoading ? "default" : "pointer", maxWidth: 200,
+                  opacity: docsLoading ? 0.6 : 1,
+                }}
+              >
+                <option value="">{docsLoading ? "Loading…" : "None"}</option>
+                {docs.map(d => (
+                  <option key={d.id} value={d.id}>{(d.name || '').replace(/\.[a-z]+$/i, "")}</option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <div style={{ width: 1, height: 18, background: "var(--hairline)" }}></div>
 
@@ -521,6 +821,8 @@ function ScreenAIChat({ state, dispatch }) {
                   isCopied={copiedId === m.id}
                   onHover={setHoverId}
                   onCopy={copyText}
+                  citationDocName={m.citations?.[0] ? docNameById.get(String(m.citations[0].documentId)) : null}
+                  onOpenSource={handleOpenSource}
                 />
               ))}
             </div>
@@ -542,7 +844,7 @@ function ScreenAIChat({ state, dispatch }) {
 
           {/* Active doc chip */}
           {activeDoc && (
-            <div style={{ marginBottom: 10 }}>
+            <div style={{ marginBottom: 10, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               <div style={{
                 display: "inline-flex", alignItems: "center", gap: 6,
                 padding: "4px 10px 4px 8px",
@@ -570,6 +872,23 @@ function ScreenAIChat({ state, dispatch }) {
                   <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
                 </button>
               </div>
+              <button
+                type="button"
+                onClick={() => openDocPane(activeDoc, { page: 1 })}
+                title="View this document"
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 5,
+                  height: 26, padding: "0 11px", borderRadius: 100,
+                  border: "1px solid var(--hairline)", background: "var(--card)",
+                  color: "var(--ink-3)", fontSize: 11, fontWeight: 500, cursor: "pointer",
+                  transition: "color 0.12s, border-color 0.12s",
+                }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor = "color-mix(in oklch, var(--accent) 40%, var(--hairline))"; e.currentTarget.style.color = "var(--accent-ink)"; }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--hairline)"; e.currentTarget.style.color = "var(--ink-3)"; }}
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M7 3h7l5 5v11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"/><path d="M14 3v5h5"/></svg>
+                View PDF
+              </button>
             </div>
           )}
 
@@ -616,17 +935,19 @@ function ScreenAIChat({ state, dispatch }) {
               display: "flex", gap: 4, alignItems: "center", flexShrink: 0,
             }}>
               <button
-                title="Voice"
+                onClick={toggleDictation}
+                disabled={!sttOK}
+                title={sttOK ? (listening ? "Stop dictation" : "Dictate") : "Speech recognition not supported in this browser"}
+                aria-label={listening ? "Stop dictation" : "Dictate message"}
                 style={{
                   width: 34, height: 34, borderRadius: 10,
-                  border: "1px solid var(--hairline)",
-                  background: "var(--paper-2)",
+                  border: listening ? "1px solid var(--accent)" : "1px solid var(--hairline)",
+                  background: listening ? "var(--accent)" : "var(--paper-2)",
                   display: "grid", placeItems: "center",
-                  cursor: "pointer", color: "var(--ink-3)",
+                  cursor: sttOK ? "pointer" : "not-allowed", color: listening ? "white" : "var(--ink-3)",
+                  opacity: sttOK ? 1 : 0.5,
                   transition: "background 0.12s, color 0.12s",
                 }}
-                onMouseEnter={e => { e.currentTarget.style.background = "var(--card)"; e.currentTarget.style.color = "var(--ink-2)"; }}
-                onMouseLeave={e => { e.currentTarget.style.background = "var(--paper-2)"; e.currentTarget.style.color = "var(--ink-3)"; }}
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                   <rect x="9" y="3" width="6" height="12" rx="3"/>
@@ -681,10 +1002,45 @@ function ScreenAIChat({ state, dispatch }) {
         </div>
       </div>
 
-      <style>{`@keyframes dotbounce { 0%, 80%, 100% { transform: translateY(0); } 40% { transform: translateY(-6px); } }`}</style>
+      </div>{/* ── /Chat column ── */}
+
+      {/* ── PDF reading pane: in-flow split (wide) ─────────── */}
+      {pdfPane && !isNarrow && (
+        <>
+          <PaneResizer onResize={onPaneResize} />
+          <div style={{ width: paneW, flexShrink: 0, height: "100%", borderLeft: "1px solid var(--hairline)" }}>
+            <PdfPane
+              key={String(pdfPane.doc?.id ?? 'snippet')}
+              doc={pdfPane.doc}
+              page={pdfPane.page}
+              snippet={pdfPane.snippet}
+              onClose={() => setPdfPane(null)}
+            />
+          </div>
+        </>
+      )}
+
+      {/* ── PDF reading pane: slide-over drawer (narrow) ───── */}
+      {pdfPane && isNarrow && (
+        <PdfPane
+          asDrawer
+          key={String(pdfPane.doc?.id ?? 'snippet')}
+          doc={pdfPane.doc}
+          page={pdfPane.page}
+          snippet={pdfPane.snippet}
+          onClose={() => setPdfPane(null)}
+        />
+      )}
+
+      <style>{`
+        @keyframes dotbounce { 0%, 80%, 100% { transform: translateY(0); } 40% { transform: translateY(-6px); } }
+        .pdfpane-resizer { width: 8px; flex-shrink: 0; cursor: col-resize; position: relative; align-self: stretch; }
+        .pdfpane-resizer::after { content: ""; position: absolute; top: 0; bottom: 0; left: 50%; width: 1px; background: var(--hairline); transition: background .12s, width .12s; }
+        .pdfpane-resizer:hover::after { width: 3px; left: calc(50% - 1px); background: var(--accent); }
+      `}</style>
     </div>
   );
 }
 
-export { ElevatedMessage, ThinkingRow, ChatDot, ChatDivider, synthesizeFallback, CHAT_SUGGESTIONS };
+export { ElevatedMessage, ThinkingRow, ChatDot, ChatDivider, CHAT_SUGGESTIONS };
 export default ScreenAIChat;

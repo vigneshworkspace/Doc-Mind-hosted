@@ -1,6 +1,21 @@
+import { useState } from 'react';
 import { Icon } from '../components/Shell.jsx';
 
 export default function Pomodoro({ pomodoro, setPomodoro }) {
+  const [showSettings, setShowSettings] = useState(false);
+
+  // Change focus/break length. If idle, also re-seed the current countdown.
+  function setLength(key, min) {
+    const v = Math.max(1, Math.min(120, min));
+    setPomodoro(p => {
+      const next = { ...p, [key]: v };
+      if (!p.running && ((key === 'focusMin' && p.mode === 'focus') || (key === 'breakMin' && p.mode === 'break'))) {
+        next.seconds = v * 60;
+      }
+      return next;
+    });
+  }
+
   const minutes = Math.floor(pomodoro.seconds / 60);
   const seconds = pomodoro.seconds % 60;
   const total = pomodoro.mode === 'focus' ? pomodoro.focusMin * 60 : pomodoro.breakMin * 60;
@@ -60,8 +75,23 @@ export default function Pomodoro({ pomodoro, setPomodoro }) {
         <button className="btn is-accent" style={{ width: 72, height: 72, borderRadius: 36 }} onClick={toggle}>
           <Icon name={pomodoro.running ? 'pause' : 'play'} size={26} className="" />
         </button>
-        <button className="btn is-ghost is-icon"><Icon name="settings" size={16} className="" /></button>
+        <button className={`btn is-icon ${showSettings ? 'is-accent' : 'is-ghost'}`} aria-label="Timer settings" onClick={() => setShowSettings(s => !s)}><Icon name="settings" size={16} className="" /></button>
       </div>
+
+      {showSettings && (
+        <div className="card" style={{ maxWidth: 360, margin: '0 auto', width: '100%', display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {[['Focus', 'focusMin'], ['Break', 'breakMin']].map(([label, key]) => (
+            <div key={key} className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+              <span className="t-eyebrow">{label}</span>
+              <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+                <button className="btn is-ghost is-icon is-sm" aria-label={`Decrease ${label}`} onClick={() => setLength(key, pomodoro[key] - 1)}><Icon name="chevL" size={14} className="" /></button>
+                <span className="t-mono" style={{ minWidth: 56, textAlign: 'center' }}>{pomodoro[key]} min</span>
+                <button className="btn is-ghost is-icon is-sm" aria-label={`Increase ${label}`} onClick={() => setLength(key, pomodoro[key] + 1)}><Icon name="chevR" size={14} className="" /></button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="grid grid-3" style={{ maxWidth: 480, margin: '0 auto' }}>
         <div className="card card-tight">

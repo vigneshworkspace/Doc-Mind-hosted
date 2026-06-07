@@ -4,6 +4,9 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci
 
+# Cache-bust the source copy so app/ edits are picked up (BuildKit otherwise reuses
+# a stale COPY layer). Pass --build-arg CACHEBUST=$(date +%s).
+ARG CACHEBUST=0
 COPY . .
 RUN npm run build
 

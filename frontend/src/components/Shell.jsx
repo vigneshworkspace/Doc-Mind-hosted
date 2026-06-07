@@ -18,6 +18,7 @@ export function Icon({ name, size = 18, className = "nav-icon" }) {
     'visual-ai': <><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2"/><path d="M3 17l5-5 4 4 3-3 6 6"/></>,
     'concept-visualizer': <><circle cx="12" cy="12" r="2"/><ellipse cx="12" cy="12" rx="9" ry="3.5"/><ellipse cx="12" cy="12" rx="9" ry="3.5" transform="rotate(60 12 12)"/><ellipse cx="12" cy="12" rx="9" ry="3.5" transform="rotate(-60 12 12)"/></>,
     'ai-diagram-maker': <><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8 7 14 17M16 7 13 17M8 6h8"/></>,
+    visualize: <><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8 7 14 17M16 7 13 17M8 6h8"/></>,
     flashcards: <><rect x="3" y="6" width="14" height="14" rx="2"/><rect x="7" y="3" width="14" height="14" rx="2" fill="var(--paper)"/></>,
     'mind-map': <><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8 7 16 11M8 17 16 13"/></>,
     'audio-recap': <><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></>,
@@ -65,21 +66,16 @@ export const NAV_GROUPS = [
     { id: "quiz-generator", label: "Quizzes" },
     { id: "flashcards", label: "Flashcards" },
     { id: "mind-map", label: "Mind Maps" },
-    { id: "ai-diagram-maker", label: "Diagrams" },
-    { id: "concept-visualizer", label: "Concepts" },
+    { id: "visualize", label: "Visualize" },
     { id: "audio-recap", label: "Audio Recap" },
-    { id: "quick-revise", label: "Quick Revise" },
   ]},
   { label: "Ask", items: [
-    { id: "pdf-qa", label: "PDF Q&A" },
     { id: "visual-ai", label: "Visual Doubts" },
     { id: "voice-chat", label: "Voice" },
   ]},
   { label: "Workspace", items: [
     { id: "study-notes", label: "Notes" },
-    { id: "study-groups", label: "Groups" },
     { id: "pomodoro", label: "Pomodoro" },
-    { id: "history", label: "History" },
   ]},
 ];
 
@@ -91,22 +87,20 @@ export const NAV_TITLES = {
   'quiz-generator': { eyebrow: "Practice", title: "Quizzes" },
   flashcards: { eyebrow: "Repeat", title: "Flashcards" },
   'mind-map': { eyebrow: "Map", title: "Mind Maps" },
-  'ai-diagram-maker': { eyebrow: "Sketch", title: "Diagrams" },
-  'concept-visualizer': { eyebrow: "See", title: "Concept Visualizer" },
+  visualize: { eyebrow: "Sketch", title: "Visualize" },
   'audio-recap': { eyebrow: "Listen", title: "Audio Recap" },
-  'quick-revise': { eyebrow: "Skim", title: "Quick Revise" },
-  'pdf-qa': { eyebrow: "Ask", title: "PDF Q&A" },
   'visual-ai': { eyebrow: "Ask", title: "Visual Doubts" },
   'voice-chat': { eyebrow: "Speak", title: "Voice" },
   'study-notes': { eyebrow: "Write", title: "Notes" },
-  'study-groups': { eyebrow: "Together", title: "Study Groups" },
   pomodoro: { eyebrow: "Focus", title: "Pomodoro" },
-  history: { eyebrow: "Past", title: "History" },
   settings: { eyebrow: "Configure", title: "Settings" },
 };
 
 // ── Sidebar ───────────────────────────────────────────────────────────────────
-export function Sidebar({ tab, setTab, onLogout, user }) {
+export function Sidebar({ tab, setTab, onLogout, user, streak }) {
+  // Honesty contract: only show the streak line when a real, positive streak is
+  // provided by app state. No fabricated number — hide the line otherwise.
+  const streakDays = Number.isFinite(streak) && streak > 0 ? streak : null;
   const today = new Date();
   const day = today.getDate();
   const month = today.toLocaleString("en", { month: "short" }).toLowerCase();
@@ -157,9 +151,11 @@ export function Sidebar({ tab, setTab, onLogout, user }) {
             <span className="side-today-day">{day}</span>
             <div className="side-today-meta">
               <div className="side-today-month">{month}</div>
-              <div className="side-today-streak">
-                <span className="side-today-flame">●</span> 12-day streak
-              </div>
+              {streakDays != null && (
+                <div className="side-today-streak">
+                  <span className="side-today-flame">●</span> {streakDays}-day streak
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -334,7 +330,7 @@ export function CommandPalette({ open, setOpen, setTab, documents = [] }) {
         <div style={{ maxHeight: "50vh", overflowY: "auto", padding: 6 }}>
           {filtered.length === 0 && <div className="muted" style={{ padding: 18, textAlign: "center" }}>Nothing found.</div>}
           {filtered.map((item, i) => (
-            <button key={i} className="nav-item" style={{ margin: 0 }} onClick={() => { if (item.kind === "nav") setTab(item.id); setOpen(false); }}>
+            <button key={i} className="nav-item" style={{ margin: 0 }} onClick={() => { setTab(item.kind === "nav" ? item.id : "documents"); setOpen(false); }}>
               <Icon name={item.kind === "nav" ? item.id : "documents"} />
               <span className="nav-label">{item.label}</span>
               <span className="muted" style={{ fontSize: 11 }}>{item.group}</span>

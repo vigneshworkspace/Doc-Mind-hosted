@@ -9,6 +9,8 @@ function AuthScreen({ onAuth }) {
   const [shake, setShake] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [remember, setRemember] = useState(true);
+  const [notice, setNotice] = useState('');
 
   async function submit(e) {
     e.preventDefault();
@@ -34,8 +36,14 @@ function AuthScreen({ onAuth }) {
         data = await authApi.signup(form.name, form.email, form.password);
       }
 
-      // Store JWT and hand off to App
-      setToken(data.access_token);
+      // Store JWT and hand off to App ("Remember me" → persistent storage).
+      // The API layer runs every response through `normalize` (snake→camel), so
+      // the OAuth `access_token` arrives as `accessToken`. Read both shapes so a
+      // missing token never gets stored as the string "undefined" (which causes
+      // a "Bearer undefined" 401 on the next call → instant bounce to login).
+      const token = data.accessToken || data.access_token;
+      if (!token) throw new Error('Login succeeded but no token was returned. Please retry.');
+      setToken(token, remember);
       onAuth({ name: data.name || form.name || form.email.split('@')[0], email: form.email });
     } catch (err) {
       setError(err.message || 'Something went wrong. Please try again.');
@@ -136,8 +144,19 @@ function AuthScreen({ onAuth }) {
             </div>
             {mode === 'login' && (
               <div className="row" style={{ justifyContent: 'space-between', fontSize: 13 }}>
-                <label className="row" style={{ gap: 6, color: 'var(--ink-2)' }}><input type="checkbox" defaultChecked /> Remember me</label>
-                <a style={{ color: 'var(--accent)', textDecoration: 'none' }} href="#">Forgot?</a>
+                <label className="row" style={{ gap: 6, color: 'var(--ink-2)', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} /> Remember me
+                </label>
+                <a
+                  style={{ color: 'var(--accent)', textDecoration: 'none' }}
+                  href="#"
+                  onClick={(e) => { e.preventDefault(); setNotice('Password reset isn’t available yet. Contact your administrator to reset it.'); }}
+                >Forgot?</a>
+              </div>
+            )}
+            {notice && (
+              <div style={{ fontSize: 12.5, color: 'var(--ink-3)', background: 'var(--paper-2)', border: '1px solid var(--hairline)', borderRadius: 8, padding: '8px 12px', lineHeight: 1.45 }}>
+                {notice}
               </div>
             )}
             <button className="btn is-accent is-lg is-block" type="submit" disabled={loading}>
@@ -148,12 +167,6 @@ function AuthScreen({ onAuth }) {
                   : 'Create account'}{' '}
               {!loading && <Icon name="chevR" size={14} className="" />}
             </button>
-            <div className="row" style={{ gap: 10, alignItems: 'center', margin: '6px 0' }}>
-              <div className="div-v" style={{ flex: 1, height: 1, width: 'auto' }}></div>
-              <span className="muted" style={{ fontSize: 11, letterSpacing: 0.1, textTransform: 'uppercase' }}>or</span>
-              <div className="div-v" style={{ flex: 1, height: 1, width: 'auto' }}></div>
-            </div>
-            <button type="button" className="btn is-ghost is-block" disabled={loading}>Continue with Google</button>
             <div style={{ textAlign: 'center', fontSize: 13, marginTop: 4, color: 'var(--ink-3)' }}>
               {mode === 'login' ? 'New here?' : 'Already have an account?'}{' '}
               <a

@@ -81,13 +81,20 @@ def _write_embeddings_to_pgvector(db: Session, document_id: int, embeddings: lis
                 {"vec": vec_str, "id": chunk.id},
             )
         except Exception as e:
-            logger.warning(f"pgvector write failed for chunk {chunk.id}: {e}")
-            break
+            # Raise (not break+commit): a partial embedding set must not be persisted
+            # under a 'ready' status. ingest_document's except marks the doc 'failed'.
+            logger.error(f"pgvector write failed for chunk {chunk.id}: {e}")
+            raise
     db.commit()
 
 
-async def ingest_document(ctx, document_id: int):
-    """ARQ task: run full ingestion pipeline for a single document."""
+async def _run_ingest(document_id: int) -> None:
+    """Core ingestion pipeline for a single document.
+
+    Directly awaitable — no ARQ `ctx`. Called by the `ingest_document` ARQ task
+    AND by the inline upload fallback in routers/documents.py when no Redis/worker
+    is available. Owns its own DB session and never re-raises (status is left
+    'ready' on success or 'failed' on error)."""
     db: Session = SessionLocal()
     try:
         doc = db.get(Document, document_id)
@@ -178,12 +185,21 @@ async def ingest_document(ctx, document_id: int):
 
     except Exception as e:
         logger.exception(f"ingest_document: doc {document_id} failed: {e}")
+        # The failing statement may have left the session needing a rollback;
+        # without this, marking the status below would itself raise.
+        db.rollback()
         doc = db.get(Document, document_id)
         if doc:
             doc.processing_status = "failed"
             db.commit()
     finally:
         db.close()
+
+
+async def ingest_document(ctx, document_id: int):
+    """ARQ task wrapper. Delegates to _run_ingest so the same pipeline can be
+    awaited inline (no Redis/worker) from the upload handler."""
+    await _run_ingest(document_id)
 
 
 async def generate_audio_recap_task(ctx, recap_id: int):
@@ -207,10 +223,33 @@ async def generate_audio_recap_task(ctx, recap_id: int):
         summary, script = await generate_audio_recap_pipeline(doc)
         recap.summary = summary
         recap.script = script
+        db.commit()
+
+        # Render the script to real audio via local TTS (blocking → thread).
+        # TTS failure is NOT swallowed: if synthesis fails we mark the recap
+        # 'failed' (no fake success, no silent empty file) so the UI is honest.
+        import asyncio
+        import os
+        from app.core.config import settings
+        from app.voice.recap_synth import synthesize_recap
+
+        out_path = os.path.join(settings.upload_dir, "recaps", f"{recap_id}.wav")
+        try:
+            path = await asyncio.to_thread(synthesize_recap, script, out_path)
+        except Exception as e:
+            logger.error(f"Audio recap {recap_id} TTS synthesis failed: {e}")
+            recap.audio_path = None
+            recap.summary = f"Audio synthesis failed: {e}"
+            recap.processing_status = "failed"
+            db.commit()
+            return
+
+        recap.audio_path = path
         recap.processing_status = "ready"
         db.commit()
     except Exception as e:
         logger.exception(f"Audio recap {recap_id} failed: {e}")
+        db.rollback()
         recap = db.get(AudioRecap, recap_id)
         if recap:
             recap.processing_status = "failed"

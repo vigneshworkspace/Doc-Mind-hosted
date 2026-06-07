@@ -5,7 +5,12 @@ from app.core.deps import get_db, get_current_user
 from app.models.orm import User, MindMap, Document
 from app.schemas.schemas import MindMapGenerateRequest, MindMapOut
 from app.services import generators
-from app.services.generators import get_doc_context
+from app.services.generators import require_doc_context, EmptyDocumentError
+
+_EMPTY_DOC_MSG = (
+    "This document has no extracted text yet. Re-upload it (older uploads may not "
+    "have been parsed) or wait for processing to finish."
+)
 
 router = APIRouter()
 
@@ -41,8 +46,12 @@ async def generate_mindmap(
     ).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    try:
+        context = require_doc_context(doc)
+    except EmptyDocumentError:
+        raise HTTPException(status_code=422, detail=_EMPTY_DOC_MSG)
 
-    root = await generators.generate_mindmap(get_doc_context(doc))
+    root = await generators.generate_mindmap(context)
 
     mm = MindMap(
         user_id=current_user.id,

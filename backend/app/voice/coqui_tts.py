@@ -39,6 +39,14 @@ def _get_tts():
     global _tts
     if _tts is None:
         _ensure_espeak()
+        # Coqui synth is torch-CPU; without this torch may default to 1 thread in a
+        # container and run ~5x slower than realtime. Use all available cores.
+        try:
+            import torch
+            n = os.cpu_count() or 4
+            torch.set_num_threads(n)
+        except Exception:
+            pass
         from TTS.api import TTS  # heavy import — only when first used
         logger.info(f"Loading Coqui TTS {settings.coqui_tts_model} (cpu)")
         _tts = TTS(settings.coqui_tts_model, progress_bar=False)
@@ -46,11 +54,15 @@ def _get_tts():
 
 
 def is_available() -> bool:
-    """True if the Coqui TTS package is importable. Model loads lazily on first synth."""
+    """True if the Coqui TTS package is importable. Model loads lazily on first synth.
+
+    Catches any import-time failure (missing package, broken native dep) so a
+    failed probe degrades to "unavailable" rather than crashing the caller.
+    """
     try:
         import TTS  # noqa: F401
         return True
-    except ImportError:
+    except Exception:
         return False
 
 

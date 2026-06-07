@@ -9,14 +9,11 @@ from app.routers import (
     chat,
     mindmaps,
     audio_recaps,
-    quick_revise,
     notes,
-    groups,
     history,
     user_settings,
     visual_ai,
-    diagrams,
-    concepts,
+    visualize,
 )
 from app.youtube_transcript import router as youtube_router
 from app.voice.router import router as voice_router, get_fastrtc_app
@@ -34,6 +31,12 @@ app.add_middleware(
 from arq.connections import RedisSettings
 from arq import create_pool
 
+# How long (seconds) we let the whole pool-creation attempt run before giving up.
+# Even with conn_retries=0 a single connect can hang on a dead host's TCP timeout,
+# so wrap the await in asyncio.wait_for as a hard upper bound. Keeps TestClient
+# (and any no-Redis boot) from blocking on startup.
+_ARQ_CONNECT_TIMEOUT = 1.5
+
 
 def _get_redis_settings():
     import os
@@ -41,13 +44,28 @@ def _get_redis_settings():
     if "/" in url:
         url = url.split("/")[0]
     host, _, port = url.partition(":")
-    return RedisSettings(host=host or "localhost", port=int(port or 6379))
+    # conn_retries=0 + a short conn_timeout means a missing Redis fails fast
+    # instead of ARQ's default 5 retries × 1s back-off (~10s of blocked startup).
+    return RedisSettings(
+        host=host or "localhost",
+        port=int(port or 6379),
+        conn_timeout=1,
+        conn_retries=0,
+        conn_retry_delay=0,
+    )
 
 
 @app.on_event("startup")
 async def startup():
+    import asyncio
+    # Lazy / best-effort: never block boot on Redis. If the pool can't be built
+    # quickly (no Redis, wrong host, slow network), leave arq_pool=None and let
+    # request handlers fall back to inline processing.
     try:
-        app.state.arq_pool = await create_pool(_get_redis_settings())
+        app.state.arq_pool = await asyncio.wait_for(
+            create_pool(_get_redis_settings()),
+            timeout=_ARQ_CONNECT_TIMEOUT,
+        )
     except Exception:
         app.state.arq_pool = None
 
@@ -65,14 +83,11 @@ app.include_router(flashcards.router, prefix="/api/v1/flashcards", tags=["flashc
 app.include_router(chat.router, prefix="/api/v1/chat", tags=["chat"])
 app.include_router(mindmaps.router, prefix="/api/v1/mindmaps", tags=["mindmaps"])
 app.include_router(audio_recaps.router, prefix="/api/v1/audio-recaps", tags=["audio"])
-app.include_router(quick_revise.router, prefix="/api/v1/quick-revise", tags=["quick-revise"])
 app.include_router(notes.router, prefix="/api/v1/notes", tags=["notes"])
-app.include_router(groups.router, prefix="/api/v1/groups", tags=["groups"])
 app.include_router(history.router, prefix="/api/v1/history", tags=["history"])
 app.include_router(user_settings.router, prefix="/api/v1/settings", tags=["settings"])
 app.include_router(visual_ai.router, prefix="/api/v1/visual-ai", tags=["visual-ai"])
-app.include_router(diagrams.router, prefix="/api/v1/diagrams", tags=["diagrams"])
-app.include_router(concepts.router, prefix="/api/v1/concepts", tags=["concepts"])
+app.include_router(visualize.router, prefix="/api/v1/visualize", tags=["visualize"])
 app.include_router(youtube_router, tags=["youtube"])
 app.include_router(voice_router, prefix="/api/v1/voice", tags=["voice"])
 

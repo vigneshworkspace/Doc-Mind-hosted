@@ -140,8 +140,17 @@ async def summarize(request: SummarizeRequest):
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("error", "transcript failed"))
     from app.services import generators
-    summary = await generators.summarize_youtube(result.get("transcript", ""))
-    return {"video_id": result.get("video_id"), "transcript": result.get("transcript", ""), **summary}
+    from app.services.generators import GenerationError
+    try:
+        summary = await generators.summarize_youtube(result.get("transcript", ""))
+    except GenerationError:
+        raise HTTPException(status_code=503, detail="Video summary failed. Please retry.")
+    return {
+        "video_id": result.get("video_id"),
+        "transcript": result.get("transcript", ""),
+        "is_demo": not generators._has_provider(),
+        **summary,
+    }
 
 
 @router.post("/generate-cookies")

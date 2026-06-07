@@ -136,13 +136,23 @@ class NvidiaNIMProvider(LLMProvider):
         schema: type[BaseModel],
         system_prompt: Optional[str] = None,
     ) -> BaseModel:
-        """Structured output using JSON mode."""
+        """Structured output using JSON mode. json_object guarantees valid JSON but
+        not the schema shape — inject the schema into the prompt so fields match."""
+        import json as _json
         client = await self._get_client()
 
         api_messages = []
         if system_prompt:
             api_messages.append({"role": "system", "content": system_prompt})
         api_messages.extend(messages)
+        api_messages.append({
+            "role": "system",
+            "content": (
+                "Respond with a single JSON object that strictly matches this JSON Schema. "
+                "Use exactly these field names and nesting; no extra keys, no markdown.\n"
+                f"{_json.dumps(schema.model_json_schema())}"
+            ),
+        })
 
         payload = self._build_payload(
             api_messages,

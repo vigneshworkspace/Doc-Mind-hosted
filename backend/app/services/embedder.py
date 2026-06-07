@@ -10,13 +10,18 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 
+class EmbeddingError(RuntimeError):
+    """Raised when the embedding service fails. Never substitute zero vectors:
+    a zero embedding silently poisons ingest (stored as a real chunk vector) and
+    query (degenerate cosine ranking), so callers must handle the failure."""
+
+
 async def embed_texts(texts: list[str], task: str = "search_document") -> list[list[float]]:
     """
     Embed a list of texts.
     task: "search_document" for chunks at ingest time.
           "search_query" for query vectors at retrieval time.
-    Returns list of 768-dim vectors.
-    Falls back to zero vectors if Ollama unavailable.
+    Returns list of 768-dim vectors. Raises EmbeddingError on failure.
     """
     prefixed = [f"{task}: {t}" for t in texts]
     url = f"{settings.ollama_base_url}/api/embed"
@@ -31,13 +36,11 @@ async def embed_texts(texts: list[str], task: str = "search_document") -> list[l
             data = response.json()
             return data["embeddings"]
     except Exception as e:
-        logger.warning(f"Embedding failed, using zero vectors: {e}")
-        # Return zero vectors as fallback so pipeline doesn't crash
-        dim = 768
-        return [[0.0] * dim for _ in texts]
+        logger.error(f"Embedding failed: {e}")
+        raise EmbeddingError(str(e)) from e
 
 
 async def embed_query(query: str) -> list[float]:
-    """Single-query embedding for retrieval."""
+    """Single-query embedding for retrieval. Raises EmbeddingError on failure."""
     vecs = await embed_texts([query], task="search_query")
     return vecs[0]

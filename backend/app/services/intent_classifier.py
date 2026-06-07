@@ -1,8 +1,11 @@
 """Classify query intent: structural | compositional | single. Regex first, LLM fallback."""
+import logging
 import re
 from typing import Literal
 from pydantic import BaseModel
 from app.services.ai import get_provider_with_fallback
+
+logger = logging.getLogger(__name__)
 
 Intent = Literal["structural", "compositional", "single"]
 
@@ -44,5 +47,9 @@ async def classify_intent(query: str) -> Intent:
             system_prompt="Return JSON only.",
         )
         return result.intent
-    except Exception:
-        return "single"
+    except Exception as e:
+        # Query already matched compositional cues (it's here because s and c were
+        # ambiguous). On classifier failure prefer the higher-recall route rather
+        # than collapsing to 'single', which would under-retrieve.
+        logger.warning(f"Intent LLM fallback failed for {query!r}, defaulting to compositional: {e}")
+        return "compositional"

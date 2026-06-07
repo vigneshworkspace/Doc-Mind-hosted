@@ -124,9 +124,23 @@ class GroqProvider(LLMProvider):
         schema: type[BaseModel],
         system_prompt: Optional[str] = None,
     ) -> BaseModel:
-        """Structured output using Groq's JSON mode."""
+        """Structured output using Groq's JSON mode.
+
+        Groq's json_object mode guarantees *valid* JSON but not the right *shape* —
+        unlike Gemini's native response_schema. Inject the schema into the prompt so
+        the model emits the exact fields the caller's Pydantic model expects."""
         client = await self._get_client()
         api_messages = self._format_messages(messages, system_prompt)
+
+        schema_json = json.dumps(schema.model_json_schema())
+        api_messages.append({
+            "role": "system",
+            "content": (
+                "Respond with a single JSON object that strictly matches this JSON Schema. "
+                "Use exactly these field names and nesting; no extra keys, no markdown.\n"
+                f"{schema_json}"
+            ),
+        })
 
         payload = {
             "model": self.model,

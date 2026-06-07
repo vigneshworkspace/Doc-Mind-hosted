@@ -9,6 +9,13 @@ logger = logging.getLogger(__name__)
 async def handle_audio(audio):
     """Called by FastRTC ReplyOnPause when user pauses. Yields (sr, np.ndarray)."""
     sample_rate, audio_array = audio
+    # Degrade gracefully if STT isn't installed — yield nothing rather than crash
+    # the FastRTC stream worker.
+    try:
+        import faster_whisper  # noqa: F401
+    except ImportError:
+        logger.warning("STT unavailable (faster-whisper not installed); skipping turn.")
+        return
     from app.voice.stt import transcribe_audio
     text = transcribe_audio(audio_array.astype(np.int16).tobytes(), sample_rate)
     if not text:

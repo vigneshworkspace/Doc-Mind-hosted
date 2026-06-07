@@ -1,7 +1,6 @@
 """RAG pipeline orchestrator. answer() for non-streaming, stream_answer() for SSE."""
 import logging
 import re
-from dataclasses import dataclass
 from typing import AsyncIterable, Optional
 
 from sqlalchemy.orm import Session
@@ -20,27 +19,24 @@ CITE_INSTRUCTION = (
     "Cite every factual claim with the page number in brackets, e.g. [p.42]. "
     "If no source supports a claim, say so explicitly."
 )
+CITE_SECTION = (
+    "Cite the section title for each claim. "
+    "If no provided section supports a claim, say so explicitly."
+)
 REFUSE_TEMPLATE = (
     "I could not find a well-grounded answer for this question in the provided source. "
     "Try rephrasing, or check if the relevant section is in the document."
 )
 
-
-@dataclass
-class _DocStub:
-    summary: str = ""
-    section_summaries: list = None
-    parsed_md: str = ""
-    content: str = ""
-    token_count: int = 0
-
-    def __post_init__(self):
-        if self.section_summaries is None:
-            self.section_summaries = []
+# Bound how much prior conversation is replayed to the model each turn — the full
+# client-supplied history is otherwise re-sent on top of the (large) grounding context.
+_MAX_HISTORY_MESSAGES = 12
 
 
-def _empty_doc():
-    return _DocStub()
+def _trim_history(messages: list) -> list:
+    if not messages or len(messages) <= _MAX_HISTORY_MESSAGES:
+        return messages
+    return messages[-_MAX_HISTORY_MESSAGES:]
 
 
 def _render_chunks(chunks: list[RetrievedChunk]) -> str:
@@ -51,25 +47,44 @@ def _render_chunks(chunks: list[RetrievedChunk]) -> str:
     return "\n\n".join(parts)
 
 
-def _build_system(doc, chunk_context: str = "") -> str:
+def _build_citations(chunks: list[RetrievedChunk]) -> list[dict]:
+    """Map the chunks that grounded an answer to the citation contract the chat
+    surface renders. Only the chunks actually fed to the model are cited, so a
+    click jumps to text the answer was built from."""
+    return [c.to_citation() for c in chunks]
+
+
+# Sentinel key the SSE router recognises on the terminal frame to carry the
+# citations array alongside the streamed tokens (tokens are plain strings).
+CITATIONS_KEY = "__citations__"
+
+
+def _build_system(context: str, cite: str) -> str:
+    """Build a grounded system prompt from a single context channel + a citation rule.
+
+    One channel only (chunks OR a structural section) — never stack summary + chunks
+    of the same document, which re-delivers the same content as competing 'facts'.
+    """
     parts = []
-    if getattr(doc, "summary", None):
-        parts.append(f"## Document Summary\n{doc.summary}")
-    if chunk_context:
-        parts.append(f"## Relevant Sections\n{chunk_context}")
-    parts.append(f"## Instructions\n{CITE_INSTRUCTION}")
+    if context:
+        parts.append(f"## Relevant Sections\n{context}")
+    parts.append(f"## Instructions\n{cite}")
     return "\n\n".join(parts)
 
 
 async def _multi_retrieve(queries, db, user_id, document_id, query_for_rerank):
-    seen = set()
-    all_chunks = []
+    # Dedupe by chunk_id but ACCUMULATE rrf_score across query variants, so a chunk
+    # surfaced by several expanded queries keeps its aggregated cross-query evidence.
+    seen: dict[int, RetrievedChunk] = {}
+    order = []
     for q in queries:
         for c in await hybrid_retrieve(q, db, user_id, document_id):
-            if c.chunk_id not in seen:
-                seen.add(c.chunk_id)
-                all_chunks.append(c)
-    return rerank(query_for_rerank, all_chunks)
+            if c.chunk_id in seen:
+                seen[c.chunk_id].rrf_score += c.rrf_score
+            else:
+                seen[c.chunk_id] = c
+                order.append(c)
+    return rerank(query_for_rerank, order)
 
 
 def _resolve_structural(query: str, doc) -> str:
@@ -103,68 +118,86 @@ _GENERAL_SYSTEM = (
 )
 
 
-async def answer(query, messages, db: Session, user_id: int, document_id: Optional[int] = None) -> str:
+async def answer(query, messages, db: Session, user_id: int, document_id: Optional[int] = None) -> tuple[str, list[dict]]:
+    """Return the grounded reply plus the citations that backed it. Citations are
+    empty for ungrounded paths (no document, structural section, refusal)."""
     provider = get_provider_with_fallback("gemini", ["groq", "nvidia", "ollama"])
     doc = _load_doc(db, document_id, user_id)
+    messages = _trim_history(messages)
 
     # No document selected → general assistant, no RAG grounding.
     if doc is None:
-        return await provider.chat_completion(messages=messages, system_prompt=_GENERAL_SYSTEM)
+        reply = await provider.chat_completion(messages=messages, system_prompt=_GENERAL_SYSTEM)
+        return reply, []
 
-    if doc and _should_stuff(doc):
-        system = f"{doc.summary or ''}\n\n<document>\n{doc.parsed_md or doc.content or ''}\n</document>\n\n{CITE_INSTRUCTION}"
-        return await provider.chat_completion(messages=messages, system_prompt=system)
+    # Small doc → stuff the whole text (single grounding channel; no separate summary).
+    if _should_stuff(doc):
+        system = f"<document>\n{doc.parsed_md or doc.content or ''}\n</document>\n\n{CITE_INSTRUCTION}"
+        reply = await provider.chat_completion(messages=messages, system_prompt=system)
+        return reply, []
 
     intent = await classify_intent(query)
     if intent == "structural":
-        system = _build_system(doc or _empty_doc(), _resolve_structural(query, doc or _empty_doc()))
-        return await provider.chat_completion(messages=messages, system_prompt=system)
+        system = _build_system(_resolve_structural(query, doc), CITE_SECTION)
+        reply = await provider.chat_completion(messages=messages, system_prompt=system)
+        return reply, []
 
     if intent == "compositional":
         ranked = await _multi_retrieve(await decompose_query(query), db, user_id, document_id, query)
     else:
         ranked = await _multi_retrieve(await expand_query(query), db, user_id, document_id, query)
 
-    if top1_score(ranked) < settings.grounding_threshold:
-        # No reliable grounding. If we have any chunks, answer from them; else refuse.
-        if not ranked:
-            return REFUSE_TEMPLATE
+    # Grounding gate: refuse when there is nothing, OR when the best chunk's calibrated
+    # relevance is below threshold. (The threshold previously gated nothing.)
+    if not ranked or top1_score(ranked) < settings.grounding_threshold:
+        return REFUSE_TEMPLATE, []
+
     top_chunks = [c for c, _ in ranked[: settings.rerank_topk]]
-    system = _build_system(doc or _empty_doc(), _render_chunks(top_chunks))
-    return await provider.chat_completion(messages=messages, system_prompt=system)
+    system = _build_system(_render_chunks(top_chunks), CITE_INSTRUCTION)
+    reply = await provider.chat_completion(messages=messages, system_prompt=system)
+    return reply, _build_citations(top_chunks)
 
 
-async def stream_answer(query, messages, db: Session, user_id: int, document_id: Optional[int] = None) -> AsyncIterable[str]:
+async def stream_answer(query, messages, db: Session, user_id: int, document_id: Optional[int] = None) -> AsyncIterable[str | dict]:
+    """Yield reply tokens (str), then a terminal {CITATIONS_KEY: [...]} dict so the
+    SSE router can forward the grounding references on the final frame. Tokens are
+    always plain strings; the citations dict is the only non-string item emitted."""
     provider = get_provider_with_fallback("gemini", ["groq", "nvidia", "ollama"])
     doc = _load_doc(db, document_id, user_id)
+    messages = _trim_history(messages)
 
     # No document selected → general assistant, no RAG grounding.
     if doc is None:
         async for chunk in provider.stream_completion(messages=messages, system_prompt=_GENERAL_SYSTEM):
             yield chunk
+        yield {CITATIONS_KEY: []}
         return
 
-    if doc and _should_stuff(doc):
-        system = f"{doc.summary or ''}\n\n<document>\n{doc.parsed_md or doc.content or ''}\n</document>\n\n{CITE_INSTRUCTION}"
+    if _should_stuff(doc):
+        system = f"<document>\n{doc.parsed_md or doc.content or ''}\n</document>\n\n{CITE_INSTRUCTION}"
         async for chunk in provider.stream_completion(messages=messages, system_prompt=system):
             yield chunk
+        yield {CITATIONS_KEY: []}
         return
 
+    citations: list[dict] = []
     intent = await classify_intent(query)
     if intent == "structural":
-        system = _build_system(doc or _empty_doc(), _resolve_structural(query, doc or _empty_doc()))
-    elif intent == "compositional":
-        ranked = await _multi_retrieve(await decompose_query(query), db, user_id, document_id, query)
-        if not ranked:
-            yield REFUSE_TEMPLATE
-            return
-        system = _build_system(doc or _empty_doc(), _render_chunks([c for c, _ in ranked[: settings.rerank_topk]]))
+        system = _build_system(_resolve_structural(query, doc), CITE_SECTION)
     else:
-        ranked = await _multi_retrieve(await expand_query(query), db, user_id, document_id, query)
-        if not ranked:
+        if intent == "compositional":
+            ranked = await _multi_retrieve(await decompose_query(query), db, user_id, document_id, query)
+        else:
+            ranked = await _multi_retrieve(await expand_query(query), db, user_id, document_id, query)
+        # Same grounding gate as answer(): refuse on empty OR below-threshold grounding.
+        if not ranked or top1_score(ranked) < settings.grounding_threshold:
             yield REFUSE_TEMPLATE
+            yield {CITATIONS_KEY: []}
             return
-        system = _build_system(doc or _empty_doc(), _render_chunks([c for c, _ in ranked[: settings.rerank_topk]]))
+        top_chunks = [c for c, _ in ranked[: settings.rerank_topk]]
+        citations = _build_citations(top_chunks)
+        system = _build_system(_render_chunks(top_chunks), CITE_INSTRUCTION)
 
     async for chunk in provider.stream_completion(messages=messages, system_prompt=system):
         yield chunk
+    yield {CITATIONS_KEY: citations}

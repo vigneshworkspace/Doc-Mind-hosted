@@ -32,11 +32,22 @@ export async function* streamSSE(path, body) {
     const lines = buf.split('\n');
     buf = lines.pop(); // keep incomplete last line
     for (const line of lines) {
-      if (line.startsWith('data: ')) {
-        const data = line.slice(6).trim();
-        if (data === '[DONE]') return;
-        if (data) yield data;
+      if (!line.startsWith('data: ')) continue;
+      const raw = line.slice(6);
+      if (raw.trim() === '[DONE]') return;
+      if (!raw) continue;
+      // Payloads are JSON-encoded by the backend so embedded newlines never split a
+      // frame. Parse without trimming so token whitespace is preserved exactly.
+      let val;
+      try {
+        val = JSON.parse(raw);
+      } catch {
+        continue;
       }
+      if (val && typeof val === 'object' && val.__error__) {
+        throw new Error(val.__error__);
+      }
+      if (typeof val === 'string' && val.length) yield val;
     }
   }
 }

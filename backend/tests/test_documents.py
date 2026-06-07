@@ -51,3 +51,28 @@ def test_documents_isolation(client):
 
     r = client.get(f"/api/v1/documents/{doc_id}", headers=h2)
     assert r.status_code == 404
+
+
+# Regression: GET /documents/{id} must return DocumentDetailOut, which carries the
+# parsed text fields the frontend PdfQA screen reads (parsed_md || content) plus
+# page_count. An AI reverting the response_model to DocumentOut would silently drop
+# these keys, sending the Q&A screen back to showing hardcoded mock content.
+# These fields MUST be present in the single-document response.
+DOC_DETAIL_FIELDS = ["content", "parsed_md", "summary", "page_count", "outline"]
+
+
+def test_document_detail_contract(client):
+    h = _auth(client, "detail@test.com")
+    r = client.post(
+        "/api/v1/documents",
+        files={"file": ("paper.pdf", io.BytesIO(b"data"), "application/pdf")},
+        headers=h,
+    )
+    doc_id = r.json()["id"]
+
+    # The list endpoint (DocumentOut) does NOT carry parsed text — only the detail does.
+    r = client.get(f"/api/v1/documents/{doc_id}", headers=h)
+    assert r.status_code == 200
+    body = r.json()
+    for field in DOC_DETAIL_FIELDS:
+        assert field in body, f"DocumentDetailOut missing '{field}' — PdfQA contract broken"

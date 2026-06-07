@@ -1,6 +1,10 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Icon } from '../components/Shell';
+import { ErrorRetry } from '../components/GenState.jsx';
+import { history as historyApi } from '../api/index.js';
 import foxHeadImg from '../assets/fox-head.png';
+
+const keyOf = (d) => d.toISOString().slice(0, 10);
 
 // ─────────────────────────── DASHBOARD ───────────────────────────
 function ScreenDashboard({ state, setTab, dispatch }) {
@@ -9,9 +13,60 @@ function ScreenDashboard({ state, setTab, dispatch }) {
   const greet = hour < 6 ? "Up early" : hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
   const completed = state.quizzes.filter(q => q.completed);
   const avgScore = completed.length ? Math.round(completed.reduce((a, q) => a + (q.score || 0), 0) / completed.length) : 0;
-  const streak = state.streak;
 
-  // issue number derived from weekday / streak for fun
+  // ── Real activity from the API (history.list) ───────────────────────
+  // Response (post-normalize): { days: [{ date, count }], streak, bestStreak, total }.
+  // No mock fallback — on failure we surface ErrorRetry per the honesty contract.
+  const [hist, setHist] = useState(null);
+  const [histError, setHistError] = useState(false);
+  const [histLoading, setHistLoading] = useState(true);
+
+  const loadHistory = useCallback(() => {
+    setHistLoading(true);
+    setHistError(false);
+    historyApi.list()
+      .then((res) => { setHist(res); setHistLoading(false); })
+      .catch(() => { setHist(null); setHistError(true); setHistLoading(false); });
+  }, []);
+
+  useEffect(() => { loadHistory(); }, [loadHistory]);
+
+  const days = hist?.days || [];
+  const streak = hist?.streak ?? 0;
+  const bestStreak = Math.max(hist?.bestStreak ?? 0, streak);
+  const histReady = !!hist && !histError;
+
+  // ── Real derived metrics (was hardcoded) ───────────────────────────
+  const incompleteQuizzes = state.quizzes.filter(q => !q.completed).length;
+  const docCount = state.documents.length;
+  const recapCount = state.audioRecaps?.length || 0;
+  const startedQuiz = state.quizzes.find(q => !q.completed) || state.quizzes[0];
+  const lastDoc = state.documents[0];
+
+  // Distinct active dates -> Set of YYYY-MM-DD keys (drives heatmap + dots).
+  const activitySet = useMemo(() => new Set(days.map(d => d.date)), [days]);
+  // this week's Mon→Sun activity (real, from API days)
+  const weekActivity = useMemo(() => {
+    const base = new Date();
+    const dow = (base.getDay() + 6) % 7; // 0 = Monday
+    const monday = new Date(base); monday.setDate(base.getDate() - dow);
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(monday); d.setDate(monday.getDate() + i);
+      return activitySet.has(keyOf(d));
+    });
+  }, [activitySet]);
+  // sessions logged in the last 7 days (sum of per-day counts, real)
+  const sessions7 = useMemo(() => {
+    const cutoff = Date.now() - 7 * 86400000;
+    return days.reduce((sum, d) => (new Date(d.date).getTime() >= cutoff ? sum + d.count : sum), 0);
+  }, [days]);
+  // most recent active days for the inline activity timeline (History absorbed)
+  const recentActivity = useMemo(
+    () => [...days].sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 8),
+    [days],
+  );
+
+  // issue number derived from day-of-year for fun
   const issueNum = Math.floor((now - new Date(now.getFullYear(), 0, 1)) / 86400000) + 100;
 
   return (
@@ -34,7 +89,7 @@ function ScreenDashboard({ state, setTab, dispatch }) {
             {greet}, <em className="t-italic">{(state.user.name || "Student").split(" ")[0]}</em>.
           </h1>
           <p style={{maxWidth: "58ch", marginTop: 16, fontSize: 15.5, lineHeight: 1.6, color: "var(--ink-2)"}}>
-            You've kept a {streak}-day streak<span className="fn">1</span>. Two quizzes wait, three new ideas sit in the library, and one audio recap is queued for your commute<span className="fn">2</span>. Quiet work ahead.
+            {histReady ? `You've kept a ${streak}-day streak. ` : ''}{incompleteQuizzes} quiz{incompleteQuizzes === 1 ? '' : 'zes'} {incompleteQuizzes === 1 ? 'waits' : 'wait'}, {docCount} document{docCount === 1 ? '' : 's'} in your library, and {recapCount} audio recap{recapCount === 1 ? '' : 's'} ready. Quiet work ahead.
           </p>
         </div>
         <div style={{display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 14}}>
@@ -57,42 +112,54 @@ function ScreenDashboard({ state, setTab, dispatch }) {
             <span className="tag">Streak</span>
             <Icon name="flame" size={16} className="" />
           </div>
-          <div>
-            <div className="bignum"><em>{streak}</em></div>
-            <div className="row" style={{gap: 6, marginTop: 8, color: "var(--ink-3)", fontSize: 12.5}}>
-              <span>days running</span>
-              <span style={{color: "var(--ink-4)"}}>·</span>
-              <span>best: 21</span>
-            </div>
-          </div>
-          {/* tiny weekday dots */}
-          <div className="row" style={{gap: 6, marginTop: 14}}>
-            {["M","T","W","T","F","S","S"].map((d, i) => (
-              <div key={i} style={{flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4}}>
-                <div style={{width: 18, height: 18, borderRadius: 4, background: i <= 4 ? "var(--accent)" : "var(--paper-2)", border: i > 4 ? "1px solid var(--hairline)" : 0}}></div>
-                <span style={{fontSize: 9.5, color: "var(--ink-4)", fontWeight: 500}}>{d}</span>
+          {histError ? (
+            <ErrorRetry message="Couldn't load your activity." onRetry={loadHistory} />
+          ) : (
+            <>
+              <div>
+                <div className="bignum"><em>{histLoading ? '·' : streak}</em></div>
+                <div className="row" style={{gap: 6, marginTop: 8, color: "var(--ink-3)", fontSize: 12.5}}>
+                  <span>days running</span>
+                  <span style={{color: "var(--ink-4)"}}>·</span>
+                  <span>best: {histLoading ? '—' : bestStreak}</span>
+                </div>
               </div>
-            ))}
-          </div>
+              {/* tiny weekday dots — real, from this week's activity */}
+              <div className="row" style={{gap: 6, marginTop: 14}}>
+                {["M","T","W","T","F","S","S"].map((d, i) => {
+                  const on = histReady && weekActivity[i];
+                  return (
+                    <div key={i} style={{flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4}}>
+                      <div style={{width: 18, height: 18, borderRadius: 4, background: on ? "var(--accent)" : "var(--paper-2)", border: on ? 0 : "1px solid var(--hairline)"}}></div>
+                      <span style={{fontSize: 9.5, color: "var(--ink-4)", fontWeight: 500}}>{d}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
         </div>
 
         {/* OPEN — what to pick up */}
         <div className="paper-card" style={{display: "flex", flexDirection: "column", gap: 14, minHeight: 220, padding: 22, paddingTop: 18}}>
           <div className="row" style={{justifyContent: "space-between"}}>
             <span className="tag">Continue</span>
-            <button className="btn is-quiet is-sm" onClick={() => setTab("history")}>All →</button>
           </div>
           <div>
-            <div className="muted" style={{fontSize: 11.5, marginBottom: 4}}><span className="numeral">I.</span> The quiz you started</div>
-            <div style={{fontFamily: "var(--f-display)", fontSize: 22, lineHeight: 1.15, marginTop: 2}}>{state.quizzes.find(q => !q.completed)?.title || state.quizzes[0]?.title}</div>
-            <div className="muted" style={{fontSize: 12, marginTop: 4}}>Started {state.quizzes.find(q => !q.completed)?.date} · 4 of 10 questions answered</div>
-            <button className="btn is-sm is-accent" style={{marginTop: 12}} onClick={() => setTab("quiz-generator")}><Icon name="play" size={11} className="" /> Resume</button>
+            <div className="muted" style={{fontSize: 11.5, marginBottom: 4}}><span className="numeral">I.</span> {startedQuiz?.completed ? 'Your latest quiz' : 'The quiz you started'}</div>
+            <div style={{fontFamily: "var(--f-display)", fontSize: 22, lineHeight: 1.15, marginTop: 2}}>{startedQuiz?.title || 'No quizzes yet'}</div>
+            <div className="muted" style={{fontSize: 12, marginTop: 4}}>
+              {startedQuiz?.date ? `${startedQuiz.date}` : 'Generate one to begin'}
+              {startedQuiz?.questions?.length ? ` · ${startedQuiz.questions.length} questions` : ''}
+              {startedQuiz?.completed && startedQuiz?.score != null ? ` · scored ${startedQuiz.score}%` : ''}
+            </div>
+            <button className="btn is-sm is-accent" style={{marginTop: 12}} onClick={() => setTab("quiz-generator")}><Icon name="play" size={11} className="" /> {startedQuiz?.completed ? 'New quiz' : 'Resume'}</button>
           </div>
           <div className="hairline" style={{marginTop: 4}}></div>
           <div>
-            <div className="muted" style={{fontSize: 11.5, marginBottom: 4}}><span className="numeral">II.</span> Where you left reading</div>
-            <div style={{fontFamily: "var(--f-display)", fontSize: 18, marginTop: 2}}>{state.documents[0]?.name}</div>
-            <div className="muted" style={{fontSize: 12, marginTop: 2}}>Page 4 of 12</div>
+            <div className="muted" style={{fontSize: 11.5, marginBottom: 4}}><span className="numeral">II.</span> Most recent document</div>
+            <div style={{fontFamily: "var(--f-display)", fontSize: 18, marginTop: 2}}>{lastDoc?.name || 'Upload a document'}</div>
+            <div className="muted" style={{fontSize: 12, marginTop: 2}}>{lastDoc ? `${lastDoc.size || ''}${lastDoc.page_count ? ` · ${lastDoc.page_count} pages` : ''}` : 'Library is empty'}</div>
           </div>
         </div>
 
@@ -117,8 +184,8 @@ function ScreenDashboard({ state, setTab, dispatch }) {
         {[
           {label: "Documents", value: state.documents.length, sub: "in library"},
           {label: "Quizzes", value: completed.length, sub: "completed"},
-          {label: "Avg. score", value: `${avgScore}%`, sub: "last 30 days"},
-          {label: "Hours focused", value: "14.2", sub: "this week"},
+          {label: "Avg. score", value: `${avgScore}%`, sub: "completed quizzes"},
+          {label: "Sessions", value: sessions7, sub: "last 7 days"},
         ].map((m, i) => (
           <div key={m.label} style={{padding: "18px 22px", borderRight: i === 3 ? 0 : "1px solid var(--hairline)", background: "var(--card)"}}>
             <div className="tag">{m.label}</div>
@@ -150,16 +217,21 @@ function ScreenDashboard({ state, setTab, dispatch }) {
         </div>
       </div>
 
-      {/* BIG TWO-COLUMN: activity heatmap + pull quote */}
+      {/* BIG TWO-COLUMN: activity heatmap + inline activity timeline (History absorbed) */}
       <div className="dash-twocol" style={{display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 18}}>
-        <ActivityCard streak={state.streak} activityLog={state.activityLog} />
-        <div className="stripe-card" style={{padding: 28, display: "flex", flexDirection: "column", justifyContent: "space-between"}}>
-          <span className="tag">Editor's note</span>
-          <div className="pullquote">
-            We don't rise to the level of our goals; we fall to the level of our systems.
-          </div>
-          <div className="marg" style={{maxWidth: 280, alignSelf: "flex-end"}}>James Clear, paraphrased — a useful reminder when motivation is low.</div>
-        </div>
+        <ActivityCard
+          streak={streak}
+          activitySet={activitySet}
+          loading={histLoading}
+          error={histError}
+          onRetry={loadHistory}
+        />
+        <ActivityTimeline
+          items={recentActivity}
+          loading={histLoading}
+          error={histError}
+          onRetry={loadHistory}
+        />
       </div>
 
       {/* RECENT LIBRARY — paper-styled list */}
@@ -170,7 +242,7 @@ function ScreenDashboard({ state, setTab, dispatch }) {
         </div>
         <div className="card card-flush">
           {state.documents.map((d, i) => (
-            <div key={d.id} className="lift" role="button" tabIndex={0} style={{display: "grid", gridTemplateColumns: "auto auto 1fr auto auto auto", gap: 18, alignItems: "center", padding: "14px 22px", width: "100%", textAlign: "left", background: "transparent", border: 0, borderBottom: i === state.documents.length - 1 ? 0 : "1px solid var(--hairline)", cursor: "default"}} onClick={() => setTab("pdf-qa")}>
+            <div key={d.id} className="lift" role="button" tabIndex={0} style={{display: "grid", gridTemplateColumns: "auto auto 1fr auto auto auto", gap: 18, alignItems: "center", padding: "14px 22px", width: "100%", textAlign: "left", background: "transparent", border: 0, borderBottom: i === state.documents.length - 1 ? 0 : "1px solid var(--hairline)", cursor: "default"}} onClick={() => setTab("ai-chat")}>
               <span className="t-mono" style={{color: "var(--ink-4)", fontSize: 11, width: 24}}>{String(i+1).padStart(2,"0")}</span>
               <DocIcon ext={d.type} />
               <div>
@@ -338,44 +410,139 @@ export function DocIcon({ ext }) {
   );
 }
 
-function ActivityCard({ streak, activityLog }) {
-  // 8 columns × 7 rows = 56 days
+const WEEKDAYS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+
+function ActivityCard({ streak, activitySet, loading, error, onRetry }) {
+  const [monthOffset, setMonthOffset] = useState(0); // 0 = current month, -1 prev, etc.
+
+  const today = new Date();
+  const todayKey = today.toISOString().slice(0, 10);
+  const view = new Date(today.getFullYear(), today.getMonth() + monthOffset, 1);
+  const year = view.getFullYear();
+  const month = view.getMonth();
+  const monthName = view.toLocaleString(undefined, { month: "long" });
+
+  // 6 weeks × 7 = 42 stable cells; leading/trailing days belong to adjacent months.
   const cells = useMemo(() => {
-    const today = new Date();
-    const arr = [];
-    for (let i = 55; i >= 0; i--) {
-      const d = new Date(today); d.setDate(today.getDate() - i);
-      const key = d.toISOString().slice(0, 10);
-      const count = (activityLog || []).filter(x => x === key).length;
-      // seed deterministic
-      const seed = (d.getDate() * 13 + d.getMonth() * 7) % 5;
-      arr.push({ date: key, count: count + (seed < 2 ? 0 : seed - 1) });
+    const firstDow = new Date(year, month, 1).getDay();         // 0 = Sun
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const prevDays = new Date(year, month, 0).getDate();
+    const out = [];
+    for (let i = 0; i < firstDow; i++) out.push({ day: prevDays - firstDow + 1 + i, inMonth: false });
+    for (let d = 1; d <= daysInMonth; d++) {
+      const key = `${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+      out.push({ day: d, inMonth: true, key, active: activitySet.has(key), isToday: key === todayKey });
     }
-    return arr;
-  }, [activityLog]);
-  const max = Math.max(1, ...cells.map(c => c.count));
-  return (
-    <div className="card">
-      <div className="row" style={{justifyContent: "space-between", alignItems: "flex-start"}}>
-        <div>
-          <span className="t-eyebrow">Last 8 weeks</span>
-          <div style={{fontFamily: "var(--f-display)", fontSize: 22, marginTop: 4}}>Consistency</div>
+    let trail = 1;
+    while (out.length < 42) out.push({ day: trail++, inMonth: false });
+    return out;
+  }, [year, month, activitySet, todayKey]);
+
+  if (error) {
+    return (
+      <div className="card">
+        <span className="t-eyebrow">Consistency</span>
+        <div style={{ marginTop: 16 }}>
+          <ErrorRetry message="Couldn't load your activity heatmap." onRetry={onRetry} />
         </div>
-        <div className="chip is-accent"><Icon name="flame" size={11} className="" /> {streak} day streak</div>
       </div>
-      <div style={{marginTop: 18, display: "grid", gridTemplateColumns: "repeat(8, 1fr)", gap: 5}}>
+    );
+  }
+
+  return (
+    <div className="card" style={{ opacity: loading ? 0.55 : 1, transition: "opacity .2s" }}>
+      <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+        <div>
+          <span className="t-eyebrow">Consistency</span>
+          <div style={{ fontFamily: "var(--f-display)", fontSize: 22, marginTop: 4 }}>{monthName}, {year}</div>
+        </div>
+        <div className="row" style={{ gap: 6 }}>
+          <div className="chip is-accent" style={{ marginRight: 4 }}><Icon name="flame" size={11} className="" /> {streak} day streak</div>
+          <button className="btn is-ghost is-icon is-sm" aria-label="Previous month" onClick={() => setMonthOffset(o => o - 1)}><Icon name="chevL" size={14} className="" /></button>
+          <button className="btn is-ghost is-icon is-sm" aria-label="Next month" disabled={monthOffset >= 0} onClick={() => setMonthOffset(o => Math.min(0, o + 1))}><Icon name="chevR" size={14} className="" /></button>
+        </div>
+      </div>
+
+      {/* weekday header */}
+      <div style={{ marginTop: 16, display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 }}>
+        {WEEKDAYS.map(w => (
+          <div key={w} style={{ textAlign: "center", fontSize: 11, fontWeight: 600, color: "var(--ink-4)", letterSpacing: "0.04em", paddingBottom: 4 }}>{w}</div>
+        ))}
+      </div>
+
+      {/* date grid */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 }}>
         {cells.map((c, i) => {
-          const a = c.count === 0 ? 0.08 : 0.18 + (c.count / max) * 0.7;
-          return <div key={i} title={`${c.date}: ${c.count}`} style={{aspectRatio: "1", borderRadius: 4, background: `color-mix(in oklch, var(--accent) ${a * 100}%, var(--paper-2))`}}></div>;
+          const base = { aspectRatio: "1", display: "grid", placeItems: "center", borderRadius: "50%", fontSize: 13, fontFamily: "var(--f-mono)", fontVariantNumeric: "tabular-nums" };
+          if (!c.inMonth) {
+            return <div key={i} style={{ ...base, color: "var(--ink-4)", opacity: 0.4 }}>{c.day}</div>;
+          }
+          if (c.isToday) {
+            return <div key={i} title={c.active ? "Active today" : "Today"} style={{ ...base, background: "var(--accent)", color: "white", fontWeight: 600 }}>{c.day}</div>;
+          }
+          if (c.active) {
+            return <div key={i} title={`${c.key}: active`} style={{ ...base, background: "color-mix(in oklch, var(--accent) 22%, var(--paper-2))", color: "var(--accent-ink)", fontWeight: 600 }}>{c.day}</div>;
+          }
+          return <div key={i} style={{ ...base, color: "var(--ink-2)" }}>{c.day}</div>;
         })}
       </div>
-      <div className="row" style={{justifyContent: "space-between", marginTop: 12, color: "var(--ink-4)", fontSize: 11}}>
-        <span>Less</span>
-        <div className="row" style={{gap: 3}}>
-          {[0.1, 0.3, 0.5, 0.7, 0.9].map(a => <div key={a} style={{width: 10, height: 10, borderRadius: 3, background: `color-mix(in oklch, var(--accent) ${a * 100}%, var(--paper-2))`}}></div>)}
-        </div>
-        <span>More</span>
+    </div>
+  );
+}
+
+// Inline activity timeline — the standalone History screen was folded in here.
+// Renders the most recent active days (real per-day counts from the API).
+function relativeDay(dateStr) {
+  const d = new Date(dateStr + "T00:00:00");
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const diff = Math.round((today - d) / 86400000);
+  if (diff <= 0) return "Today";
+  if (diff === 1) return "Yesterday";
+  if (diff < 7) return `${diff} days ago`;
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function ActivityTimeline({ items, loading, error, onRetry }) {
+  return (
+    <div className="stripe-card" style={{ padding: 28, display: "flex", flexDirection: "column", gap: 18 }}>
+      <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
+        <span className="tag">Recent activity</span>
+        <span className="tag" style={{ color: "var(--ink-4)" }}>§ History</span>
       </div>
+
+      {error ? (
+        <ErrorRetry message="Couldn't load recent activity." onRetry={onRetry} />
+      ) : loading ? (
+        <div className="muted" style={{ fontSize: 13, color: "var(--ink-3)" }}>Loading activity…</div>
+      ) : items.length === 0 ? (
+        <div className="muted" style={{ fontSize: 13, color: "var(--ink-3)" }}>
+          No study activity logged yet. Take a quiz or review flashcards to start your streak.
+        </div>
+      ) : (
+        <div className="col" style={{ gap: 0 }}>
+          {items.map((it, i) => (
+            <div
+              key={it.date}
+              className="row"
+              style={{
+                justifyContent: "space-between",
+                alignItems: "center",
+                padding: "11px 0",
+                borderBottom: i === items.length - 1 ? 0 : "1px solid var(--hairline)",
+              }}
+            >
+              <div className="row" style={{ gap: 12, alignItems: "center" }}>
+                <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--accent)", flexShrink: 0 }} />
+                <div>
+                  <div style={{ fontFamily: "var(--f-display)", fontSize: 16 }}>{relativeDay(it.date)}</div>
+                  <div className="muted t-mono" style={{ fontSize: 11, color: "var(--ink-4)" }}>{it.date}</div>
+                </div>
+              </div>
+              <span className="chip">{it.count} session{it.count === 1 ? "" : "s"}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

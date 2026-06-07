@@ -94,9 +94,14 @@ class AudioRecap(Base):
     source_document_id = Column(Integer, ForeignKey("documents.id"), nullable=True)
     summary = Column(Text)
     script = Column(JSON, default=list)
+    audio_path = Column(String(1000), nullable=True)
     processing_status = Column(String(20), default="queued")
 
     owner = relationship("User", back_populates="audio_recaps")
+
+    @property
+    def audio_url(self):
+        return f"/api/v1/audio-recaps/{self.id}/audio" if self.audio_path else None
 
 
 class QuickReviseSession(Base):
@@ -144,7 +149,7 @@ class UserSettings(Base):
     notifications = Column(Boolean, default=True)
     auto_save = Column(Boolean, default=True)
     study_reminders = Column(Boolean, default=False)
-    ai_provider = Column(String(50), default="anthropic")
+    ai_provider = Column(String(50), default="gemini")
     ollama_endpoint = Column(String(200), default="http://localhost:11434")
 
     user = relationship("User", back_populates="settings")

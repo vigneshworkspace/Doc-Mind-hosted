@@ -47,20 +47,16 @@ const TYPE_PAIRS = {
 const SCREEN_LOADERS = {
   documents:      () => import('./screens/Library.jsx'),
   'ai-chat':      () => import('./screens/AIChat.jsx'),
-  quiz:           () => import('./screens/Quiz.jsx'),
+  'quiz-generator': () => import('./screens/Quiz.jsx'),
   flashcards:     () => import('./screens/Flashcards.jsx'),
   'mind-map':     () => import('./screens/MindMap.jsx'),
-  'ai-diagram-maker': () => import('./screens/DiagramMaker.jsx'),
-  'concept-visualizer': () => import('./screens/ConceptVisualizer.jsx'),
+  // Merged Diagram Maker + Concept Visualizer -> single Visualize screen.
+  visualize:      () => import('./screens/Visualize.jsx'),
   'audio-recap':  () => import('./screens/AudioRecap.jsx'),
-  'quick-revise': () => import('./screens/QuickRevise.jsx'),
-  'pdf-qa':       () => import('./screens/PdfQA.jsx'),
   'visual-ai':    () => import('./screens/VisualAI.jsx'),
   'voice-chat':   () => import('./screens/VoiceChat.jsx'),
   'study-notes':  () => import('./screens/Notes.jsx'),
-  'study-groups': () => import('./screens/Groups.jsx'),
   pomodoro:       () => import('./screens/Pomodoro.jsx'),
-  history:        () => import('./screens/History.jsx'),
   settings:       () => import('./screens/Settings.jsx'),
   youtube:        () => import('./screens/YouTube.jsx'),
 };
@@ -167,6 +163,15 @@ export default function App() {
     dispatch({ type: 'set-user', patch: { name: '', email: '' } });
   }
 
+  // A 401 from any API call (expired/invalid token) fires this event from
+  // client.js. Drop to the login screen cleanly — NO window.location.reload(),
+  // which caused the "flash in and bounce out" symptom.
+  useEffect(() => {
+    const onUnauthorized = () => handleLogout();
+    window.addEventListener('auth:unauthorized', onUnauthorized);
+    return () => window.removeEventListener('auth:unauthorized', onUnauthorized);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Must run before any early return — hooks can't be conditional.
   const screenProps = useMemo(
     () => ({ state, dispatch, setTab, pomodoro, setPomodoro }),
@@ -194,7 +199,7 @@ export default function App() {
     return <Screen {...screenProps} />;
   }
 
-  const flushTabs = ['ai-chat', 'pdf-qa'];
+  const flushTabs = ['ai-chat'];
 
   return (
     <div className={`app${t.sidebar === 'rail' ? ' is-rail' : ''}${mobileOpen ? ' is-mobile-open' : ''}`}>

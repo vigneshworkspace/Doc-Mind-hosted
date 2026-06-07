@@ -50,6 +50,8 @@ services:
 
   backend:
     build: ./backend
+    image: doc-mind-20260601-backend:latest
+    restart: unless-stopped
     env_file: ./backend/.env
     environment:
       DATABASE_URL: postgresql://docmind:docmind@db:5432/docmind
@@ -72,7 +74,9 @@ services:
       sh -c "python init_db.py && uvicorn main:app --host 0.0.0.0 --port 8000"
 
   worker:
-    build: ./backend
+    # Reuse the backend image — same code/deps, no separate build to drift out of sync.
+    image: doc-mind-20260601-backend:latest
+    restart: unless-stopped
     env_file: ./backend/.env
     environment:
       DATABASE_URL: postgresql://docmind:docmind@db:5432/docmind

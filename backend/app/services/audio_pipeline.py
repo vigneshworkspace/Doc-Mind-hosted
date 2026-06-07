@@ -41,49 +41,65 @@ class _Script(BaseModel):
 
 
 async def generate_audio_recap_pipeline(doc: Document) -> tuple[str, list[dict]]:
-    """6-step Audio Recap. Returns (summary, script_list). Falls back to a simple
-    2-turn script if the multi-step pipeline fails at any stage."""
+    """6-step Audio Recap (outline → critique → revise → draft → critique → final).
+
+    Each step is guarded individually: if a late step fails, the best script produced
+    so far (draft, else any) is returned with real document content — never a generic
+    content-free stub — and a partial result raises only when no script was produced.
+    """
     provider = get_provider_with_fallback("gemini", ["groq", "nvidia", "ollama"])
     ctx = get_doc_context(doc)
+    # Keep the source pinned across stages so critiques/edits stay grounded.
+    source = ctx[:8000]
+
+    best: _Script | None = None
 
     try:
         outline = await provider.structured_output(
-            messages=[{"role": "user", "content": f"Create a 5-min podcast outline (4-6 sections, speakers Alex & Jamie).\n\n{ctx[:8000]}"}],
+            messages=[{"role": "user", "content": f"Create a 5-min podcast outline (4-6 sections, speakers Alex & Jamie).\n\n{source}"}],
             schema=_Outline,
             system_prompt="Podcast producer. Return JSON only.",
         )
-        critique1 = await provider.structured_output(
-            messages=[{"role": "user", "content": f"Critique this outline:\n{outline.model_dump_json()}"}],
-            schema=_Critique,
-            system_prompt="Critical editor. Return JSON only.",
-        )
-        revised = await provider.structured_output(
-            messages=[{"role": "user", "content": f"Revise outline using critique.\nOutline:{outline.model_dump_json()}\nCritique:{critique1.model_dump_json()}"}],
-            schema=_Outline,
-            system_prompt="Podcast producer. Return JSON only.",
-        )
-        draft = await provider.structured_output(
-            messages=[{"role": "user", "content": f"Write full script (20-30 turns, conversational) from this outline.\nOutline:{revised.model_dump_json()}\nSource:{ctx[:6000]}"}],
+        try:
+            critique1 = await provider.structured_output(
+                messages=[{"role": "user", "content": f"Critique this outline against the source.\nSource:{source[:4000]}\nOutline:{outline.model_dump_json()}"}],
+                schema=_Critique,
+                system_prompt="Critical editor. Return JSON only.",
+            )
+            outline = await provider.structured_output(
+                messages=[{"role": "user", "content": f"Revise outline using critique.\nOutline:{outline.model_dump_json()}\nCritique:{critique1.model_dump_json()}"}],
+                schema=_Outline,
+                system_prompt="Podcast producer. Return JSON only.",
+            )
+        except Exception as e:
+            logger.warning(f"Audio recap critique/revise step failed, using unrevised outline: {e}")
+
+        best = await provider.structured_output(
+            messages=[{"role": "user", "content": f"Write full script (20-30 turns, conversational) from this outline.\nOutline:{outline.model_dump_json()}\nSource:{source[:6000]}"}],
             schema=_Script,
             system_prompt="Podcast scriptwriter. Return JSON only.",
         )
-        critique2 = await provider.structured_output(
-            messages=[{"role": "user", "content": f"Critique this script for accuracy, flow, pacing.\n{draft.model_dump_json()[:4000]}"}],
-            schema=_Critique,
-            system_prompt="Critical editor. Return JSON only.",
-        )
-        final = await provider.structured_output(
-            messages=[{"role": "user", "content": f"Final revised script.\nScript:{draft.model_dump_json()[:4000]}\nCritique:{critique2.model_dump_json()}"}],
-            schema=_Script,
-            system_prompt="Podcast scriptwriter. Return JSON only.",
-        )
-        return final.summary, [t.model_dump() for t in final.script]
+
+        try:
+            critique2 = await provider.structured_output(
+                messages=[{"role": "user", "content": f"Critique this script for accuracy against the source, flow, pacing.\nSource:{source[:3000]}\nScript:{best.model_dump_json()[:4000]}"}],
+                schema=_Critique,
+                system_prompt="Critical editor. Return JSON only.",
+            )
+            best = await provider.structured_output(
+                messages=[{"role": "user", "content": f"Final revised script (do not introduce facts absent from the source).\nSource:{source[:3000]}\nScript:{best.model_dump_json()[:4000]}\nCritique:{critique2.model_dump_json()}"}],
+                schema=_Script,
+                system_prompt="Podcast scriptwriter. Return JSON only.",
+            )
+        except Exception as e:
+            logger.warning(f"Audio recap final-critique step failed, using draft script: {e}")
+
+        return best.summary, [t.model_dump() for t in best.script]
     except Exception as e:
-        logger.warning(f"Audio pipeline failed, using fallback: {e}")
-        return (
-            "A conversational recap of the document's key concepts.",
-            [
-                {"speaker": "Alex", "dialogue": "Welcome! Today we're reviewing this document together."},
-                {"speaker": "Jamie", "dialogue": "Let's dive into the key concepts."},
-            ],
-        )
+        if best is not None:
+            logger.warning(f"Audio pipeline degraded, returning best available script: {e}")
+            return best.summary, [t.model_dump() for t in best.script]
+        # No script produced at all — surface the failure so the recap is marked failed
+        # rather than silently storing a content-free stub.
+        logger.error(f"Audio pipeline produced no script: {e}")
+        raise

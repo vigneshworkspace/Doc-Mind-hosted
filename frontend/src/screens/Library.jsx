@@ -128,7 +128,7 @@ function ScreenDocuments({ state, dispatch, setTab }) {
       {view === "grid" ? (
         <div className="grid grid-3">
           {docs.map(d => (
-            <div key={d.id} className="card lift" style={{display: "flex", flexDirection: "column", gap: 14, cursor: "default"}} onClick={() => setTab("pdf-qa")}>
+            <div key={d.id} className="card lift" style={{display: "flex", flexDirection: "column", gap: 14, cursor: "default"}} onClick={() => setTab("ai-chat")}>
               <div style={{aspectRatio: "4/3", borderRadius: 10, background: "var(--paper-2)", border: "1px solid var(--hairline)", display: "grid", placeItems: "center", position: "relative"}}>
                 <DocIcon ext={d.type} />
                 <div style={{position: "absolute", inset: 0, background: "repeating-linear-gradient(0deg, transparent 0, transparent 6px, color-mix(in oklch, var(--hairline) 50%, transparent) 6px, color-mix(in oklch, var(--hairline) 50%, transparent) 7px)", borderRadius: 10, pointerEvents: "none"}}></div>
@@ -139,7 +139,7 @@ function ScreenDocuments({ state, dispatch, setTab }) {
               </div>
               <div className="row" style={{gap: 6, flexWrap: "wrap"}}>{d.tags.map(t => <span key={t} className="chip">{t}</span>)}</div>
               <div className="row" style={{gap: 6, marginTop: 4}}>
-                <button className="btn is-ghost is-sm" onClick={(e) => { e.stopPropagation(); setTab("pdf-qa"); }}>Ask</button>
+                <button className="btn is-ghost is-sm" onClick={(e) => { e.stopPropagation(); setTab("ai-chat"); }}>Ask</button>
                 <button className="btn is-ghost is-sm" onClick={(e) => { e.stopPropagation(); setTab("quiz-generator"); }}>Quiz</button>
                 <button className="btn is-ghost is-sm" onClick={(e) => { e.stopPropagation(); setTab("flashcards"); }}>Cards</button>
                 <button className="btn is-ghost is-sm" style={{ marginLeft: 'auto', color: 'var(--danger)' }} onClick={(e) => { e.stopPropagation(); handleDelete(d.id); }}>Delete</button>
@@ -162,7 +162,7 @@ function ScreenDocuments({ state, dispatch, setTab }) {
                 <div className="muted" style={{fontSize: 12}}>{d.uploadDate} · {d.size}</div>
               </div>
               <div className="row" style={{gap: 6}}>{d.tags.map(t => <span key={t} className="chip">{t}</span>)}</div>
-              <button className="btn is-quiet is-sm" onClick={() => setTab("pdf-qa")}>Ask →</button>
+              <button className="btn is-quiet is-sm" onClick={() => setTab("ai-chat")}>Ask →</button>
               <Icon name="chevR" size={14} className="" />
             </div>
           ))}
